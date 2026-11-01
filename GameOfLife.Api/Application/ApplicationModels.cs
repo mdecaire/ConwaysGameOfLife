@@ -1,8 +1,8 @@
 namespace GameOfLife.Api.Application;
 
 /// <summary>The boolean grid supplied for a new board.</summary>
-/// <param name="Cells">The cells indexed by row, then column; true indicates a living cell.</param>
-public sealed record UploadBoardRequest(bool[][] Cells);
+/// <param name="Cells">The cells indexed by row, then column; true indicates a living cell. Null is rejected by upload validation.</param>
+public sealed record UploadBoardRequest(bool[][]? Cells);
 
 /// <summary>The identifier, generation, dimensions, and cells of a board.</summary>
 /// <param name="BoardId">The unique board identifier.</param>

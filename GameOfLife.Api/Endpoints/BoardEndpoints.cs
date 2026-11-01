@@ -11,6 +11,14 @@ public static class BoardEndpoints
         app.MapPost("/api/boards", (
             UploadBoardRequest request, BoardService service, CancellationToken cancellationToken) =>
         {
+            if (request.Cells is null)
+            {
+                return Results.Problem(
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid board",
+                    detail: "The cells grid must not be null.");
+            }
+
             var (boardId, state) = service.Upload(request.Cells, cancellationToken);
             return Results.Json(new BoardResponse(
                 boardId, 0, state.Width, state.Height, request.Cells),
