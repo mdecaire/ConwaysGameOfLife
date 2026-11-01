@@ -1,6 +1,6 @@
 # Conway's Game of Life API
 
-C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-5 are complete; Slice 6 concurrency and bounded contention handling is implemented for developer review. Final-state discovery remains future work.
+C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-6 are complete; Slice 7 domain final-state discovery is implemented for developer review. The final-state HTTP endpoint and persistence remain future work.
 
 Run from the repository root:
 
@@ -43,7 +43,7 @@ Uncommitted updates roll back. Exceptions, including commit failures or lost ack
 
 Generation quantities use nonnegative 64-bit integers. `stepsAhead` is required. Missing/empty query values, malformed/fractional/overflowing quantities, negative values, invalid IDs, and overflowing current-generation-plus-offset return `400` ProblemDetails. Unknown boards return `404` ProblemDetails. Both GETs propagate request cancellation and preserve all stored values.
 
-There is no approved numeric retrieval computation cap. Tests exercise 10,001 calls on both routes. Large counts can occupy CPU and a request thread until cancellation. A configurable server request timeout is proposed for developer review; no timeout value or new generation limit has been introduced. The final-state search budget belongs to its own slice. Real Kestrel payload-boundary and elaborate disconnect tests remain in Slice 10.
+There is no approved numeric retrieval computation cap. Tests exercise 10,001 calls on both routes. Large counts can occupy CPU and a request thread until cancellation. A configurable server request timeout is proposed for developer review; no timeout value or new generation limit has been introduced. The domain final-state search defaults provisionally to 10,000 actual engine calls, with an internal-only override. It returns Stable, Cycle, or Inconclusive with exact generation/period/call metadata, verifying living-cell equality after fingerprint lookup. This limit applies only to final-state discovery. Real Kestrel payload-boundary and elaborate disconnect tests remain in Slice 10.
 
 Before running tests on Windows accounts without Event Log write permission, disable that provider for the test process so intentional failed-write tests can exercise exception handling:
 
