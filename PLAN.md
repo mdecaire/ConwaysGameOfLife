@@ -1,6 +1,6 @@
 # Conway’s Game of Life API implementation plan
 
-> Current implementation status (Slice 7 handoff): Slices 1-6 are complete. Slice 7 bounded final-state discovery is implemented for developer review. It is a pure domain component with an internal provisional 10,000-engine-call default, exact equality after fingerprint lookup, and Stable/Cycle/Inconclusive results. Endpoints and persistence remain in Slice 8. Stop before Slice 8.
+> Current implementation status (Slice 8 handoff): Slices 1-7 are complete and reviewed under the latest request. Slice 8 final-state HTTP discovery and durable SQLite result reuse are implemented for developer review. Stop before Slice 9.
 
 ## 1. Baseline and architecture
 
@@ -218,6 +218,20 @@ git diff --check
 ```
 
 Debug and Release each passed 53 unit and 64 integration cases, with no failures/skips; the whitespace check passed. Targeted RED/GREEN runs used the same unit-project command with focused `FullyQualifiedName~` filters; the final full runs include all restored code. Changed files: `Domain/FinalStateDiscovery.cs`, `Domain/FinalStateResult.cs`, `FinalStateDiscoveryTests.cs`, `PLAN.md`, and README status/budget notes. No changes to the approved algorithm or scope were needed. Deliberate limits: the provisional budget is not performance tuning; dictionary storage retains observed states, and the simple fingerprint can collide, with exact comparisons preserving correctness. There are no functional blockers or new dependencies. Stop after Slice 7 for developer review; do not begin Slice 8.
+
+### Slice 8: Final-state HTTP endpoint and durable persistence - implemented for review
+
+The latest Slice 8 request approves the endpoint and persistence, reusing Slice 7 unchanged. `GET /api/boards/{id}/final-state` checks SQLite first, otherwise discovers from one committed snapshot with the existing 10,000-call default, commits only success, and returns the original saved metadata. It never advances current progress. Missing boards return 404, supplied `maxIterations` returns 400, exhaustion returns 422, and unexpected persistence errors retain sanitized 500 handling.
+
+Schema initialization adds `FinalStateResults` with the approved six fields and unique board FK. Parameterized SQL uses the existing codec and a short transaction; `ON CONFLICT(BoardId) DO NOTHING` handles only the documented same-board conflict, followed by a winner lookup. Next never alters this table. No new dependencies, serializers, persistence hierarchy, memory cache, background work, locks, or retry framework were introduced.
+
+Sixteen new integration cases cover exact stable/cycle HTTP and persisted metadata, unchanged current progress, byte-for-byte reuse and measured zero additional engine calls after second request/restart/three Next calls, real-glider exhaustion at exactly 10,000 calls, missing boards, unsupported query values, no automatic results from other routes, failed insert/commit rollback, unrelated uniqueness failures, cancellation at entry/after calculation/before commit, confirmed-commit preservation, and sequential same-board winner reuse. Cancellation cases use the application/store boundary and real SQLite; elaborate disconnect coverage remains Slice 10. Simultaneous discovery and Next interleavings remain Slice 9.
+
+Actual RED: the initial stable HTTP/persistence acceptance test returned 404 because the route was absent. GREEN: endpoint/service/storage implementation made it pass. Workflow deviation: the general implementation covered multiple behaviors in that first cycle; remaining focused tests passed on introduction, rather than separate RED-first cycles for each behavior. No additional RED is claimed.
+
+Actual verification (with `$env:Logging__EventLog__LogLevel__Default = 'None'`): focused `dotnet test GameOfLife.IntegrationTests --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal --filter FullyQualifiedName~BoardFinalStateTests` passed 16 cases. Full `dotnet test GameOfLife.sln --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal` and the same command with `-c Release` each passed 53 unit and 80 integration cases, with no failures/skips. `git diff --check` passed.
+
+Changed files: `Application/ApplicationModels.cs`, `Application/BoardService.cs`, `Endpoints/BoardEndpoints.cs`, `Infrastructure/SqliteBoardStore.cs`, `BoardFinalStateTests.cs`, README, and this status/handoff. No unresolved functional blocker was found. The default budget remains provisional; performance tuning belongs to Slice 11. Stop for developer review; do not begin Slice 9. No commit or push.
 
 ## 4. Final performance review and SQLite correctness review
 

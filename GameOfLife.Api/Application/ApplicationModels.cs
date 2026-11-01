@@ -11,3 +11,8 @@ public sealed record UploadBoardRequest(bool[][]? Cells);
 /// <param name="Height">The number of rows.</param>
 /// <param name="Cells">The cells indexed by row, then column.</param>
 public sealed record BoardResponse(Guid BoardId, long Generation, int Width, int Height, bool[][] Cells);
+
+public sealed record FinalStateResponse(Guid BoardId, long Generation, int Width, int Height,
+    bool[][] Cells, long StartingGeneration, string ConclusionKind, int CycleLength, int IterationsUsed);
+
+public sealed class FinalStateInconclusiveException : Exception;

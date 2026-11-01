@@ -8,6 +8,31 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
     private readonly int maxNextAttempts = maxNextAttempts > 0
         ? maxNextAttempts : throw new ArgumentOutOfRangeException(nameof(maxNextAttempts));
 
+    /// <summary>Reuses a durable conclusion before calculating from one committed snapshot.
+    /// Successful discovery is saved without advancing the board; exhaustion saves nothing.</summary>
+    /// <returns>The original saved conclusion, or null if the board does not exist.</returns>
+    /// <exception cref="FinalStateInconclusiveException">The internal work limit could not prove a conclusion.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was observed; a confirmed commit remains saved.</exception>
+    public FinalStateResponse? FinalState(Guid boardId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = store.FindFinalState(boardId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result is null)
+        {
+            var snapshot = store.Find(boardId);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snapshot is not { } board) return null;
+            result = new FinalStateDiscovery(engine).Discover(board.State, board.Generation, cancellationToken);
+            if (result.Outcome == FinalStateOutcome.Inconclusive) throw new FinalStateInconclusiveException();
+            cancellationToken.ThrowIfCancellationRequested();
+            result = store.SaveFinalState(boardId, result, cancellationToken);
+        }
+        var response = ToResponse(boardId, result.State, result.Generation, cancellationToken);
+        return new(boardId, response.Generation, response.Width, response.Height, response.Cells,
+            result.StartingGeneration, result.Outcome.ToString(), result.CycleLength!.Value, result.IterationsUsed);
+    }
+
     /// <summary>Reloads and recalculates on verified conflicts, returning only its own committed state.</summary>
     /// <param name="boardId">The identifier of the board to advance.</param>
     /// <param name="cancellationToken">The token checked before calculation, persistence, and response mapping.</param>

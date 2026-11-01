@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace GameOfLife.Api.Infrastructure;
 
-/// <summary>Initializes SQLite storage and persists uploaded boards.</summary>
+/// <summary>Persists board progress and successful final-state discoveries in SQLite.</summary>
 /// <param name="connectionString">The connection string used for each database operation.</param>
 /// <param name="codec">The codec used to serialize living-cell coordinates.</param>
 public sealed class SqliteBoardStore
@@ -26,7 +26,7 @@ public sealed class SqliteBoardStore
         this.createConnection = createConnection;
     }
 
-    /// <summary>Enables write-ahead logging and creates the Boards table if it does not exist.</summary>
+    /// <summary>Enables write-ahead logging and creates missing board and final-result tables.</summary>
     /// <exception cref="SqliteException">SQLite could not configure or initialize the database.</exception>
     public void Initialize()
     {
@@ -41,6 +41,14 @@ public sealed class SqliteBoardStore
                 InitialState TEXT NOT NULL,
                 CurrentState TEXT NOT NULL,
                 CurrentGeneration INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS FinalStateResults (
+                BoardId TEXT NOT NULL PRIMARY KEY REFERENCES Boards(Id),
+                StartingGeneration INTEGER NOT NULL,
+                ResultGeneration INTEGER NOT NULL,
+                ResultState TEXT NOT NULL,
+                CycleLength INTEGER NOT NULL CHECK (CycleLength > 0),
+                IterationsUsed INTEGER NOT NULL
             );
             """;
         command.ExecuteNonQuery();
@@ -107,6 +115,64 @@ public sealed class SqliteBoardStore
         return reader.Read()
             ? codec.Decode(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2))
             : null;
+    }
+
+    /// <summary>Reads the original discovery metadata and representative independently of current progress.</summary>
+    public FinalStateResult? FindFinalState(Guid boardId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT b.Width, b.Height, f.ResultState, f.StartingGeneration,
+                   f.ResultGeneration, f.CycleLength, f.IterationsUsed
+            FROM FinalStateResults f JOIN Boards b ON b.Id = f.BoardId WHERE f.BoardId = $id;
+            """;
+        command.Parameters.AddWithValue("$id", boardId.ToString());
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var period = reader.GetInt32(5);
+        var generation = reader.GetInt64(4);
+        return new(period == 1 ? FinalStateOutcome.Stable : FinalStateOutcome.Cycle,
+            codec.Decode(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2)),
+            reader.GetInt64(3), generation, period, generation - period, reader.GetInt32(6));
+    }
+
+    /// <summary>Commits a successful discovery, or returns the unchanged same-board winner.</summary>
+    /// <remarks>Only the BoardId conflict is ignored. Other constraints and database failures propagate.
+    /// Cancellation observed before commit rolls back; a completed commit remains durable.</remarks>
+    public FinalStateResult SaveFinalState(Guid boardId, FinalStateResult result,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.Outcome == FinalStateOutcome.Inconclusive || result.CycleLength is not > 0)
+            throw new ArgumentException("Only successful discoveries can be persisted.", nameof(result));
+        var encodedState = codec.Encode(result.State);
+        int inserted;
+        using (var connection = OpenConnection())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var transaction = connection.BeginTransaction(deferred: false);
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO FinalStateResults
+                    (BoardId, StartingGeneration, ResultGeneration, ResultState, CycleLength, IterationsUsed)
+                VALUES ($id, $start, $generation, $state, $period, $iterations)
+                ON CONFLICT(BoardId) DO NOTHING;
+                """;
+            command.Parameters.AddWithValue("$id", boardId.ToString());
+            command.Parameters.AddWithValue("$start", result.StartingGeneration);
+            command.Parameters.AddWithValue("$generation", result.Generation);
+            command.Parameters.AddWithValue("$state", encodedState);
+            command.Parameters.AddWithValue("$period", result.CycleLength.Value);
+            command.Parameters.AddWithValue("$iterations", result.IterationsUsed);
+            cancellationToken.ThrowIfCancellationRequested();
+            inserted = command.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
+            transaction.Commit();
+        }
+        return inserted == 1 ? result : FindFinalState(boardId)
+            ?? throw new InvalidOperationException("The saved final-state winner could not be read.");
     }
 
     public bool TryAdvance(Guid boardId, BoardState nextState, long expectedGeneration,

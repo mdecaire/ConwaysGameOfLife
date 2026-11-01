@@ -8,6 +8,30 @@ public static class BoardEndpoints
     /// <param name="app">The application on which to register the endpoint.</param>
     public static void MapBoardEndpoints(this WebApplication app)
     {
+        app.MapGet("/api/boards/{id}/final-state", (
+            Guid id, HttpRequest request, BoardService service, CancellationToken cancellationToken) =>
+        {
+            if (request.Query.ContainsKey("maxIterations"))
+                return Results.Problem(statusCode: 400, title: "Unsupported iteration budget");
+            try
+            {
+                var result = service.FinalState(id, cancellationToken);
+                return result is null
+                    ? Results.Problem(statusCode: 404, title: "Board not found")
+                    : Results.Ok(result);
+            }
+            catch (FinalStateInconclusiveException)
+            {
+                return Results.Problem(statusCode: 422, title: "Final state not proven",
+                    detail: "The internal generation calculation limit was reached.");
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return Results.Problem(statusCode: 400, title: "Invalid generation",
+                    detail: "The generation exceeds the supported integer range.");
+            }
+        });
+
         app.MapGet("/api/boards/{id}/preview", (
             Guid id, long stepsAhead, BoardService service, CancellationToken cancellationToken) =>
             ExecuteBoard(() => service.Preview(id, stepsAhead, cancellationToken)));
