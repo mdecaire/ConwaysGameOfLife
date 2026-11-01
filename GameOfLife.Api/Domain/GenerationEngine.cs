@@ -6,16 +6,25 @@ public sealed class GenerationEngine : IGenerationEngine
     /// Calculates a new board state without modifying the supplied state.
     /// </summary>
     /// <param name="state">The current finite board state.</param>
-    /// <param name="cancellationToken">The cancellation token supplied by the caller.</param>
+    /// <param name="cancellationToken">
+    /// The token checked at entry, during candidate collection, and between cell evaluations.
+    /// </param>
     /// <returns>A new state with the same dimensions.</returns>
+    /// <exception cref="OperationCanceledException">
+    /// Cancellation was requested before calculation, during candidate collection, or during cell evaluation.
+    /// </exception>
     public BoardState CalculateNextGeneration(
         BoardState state,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var nextLivingCells = new HashSet<(int X, int Y)>();
 
-        foreach (var cell in GetCandidateCells(state))
+        foreach (var cell in GetCandidateCells(state, cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var livingNeighbors = CountLivingNeighbors(state, cell);
             if (WillBeAlive(state.LivingCells.Contains(cell), livingNeighbors))
             {
@@ -30,16 +39,33 @@ public sealed class GenerationEngine : IGenerationEngine
     /// Collects living cells and their in-bounds neighbors for survival and birth evaluation.
     /// </summary>
     /// <param name="state">The current board state.</param>
+    /// <param name="cancellationToken">The token passed to candidate enumeration.</param>
     /// <returns>A distinct set of coordinates that could be alive in the next generation.</returns>
-    private static HashSet<(int X, int Y)> GetCandidateCells(BoardState state)
+    /// <exception cref="OperationCanceledException">Cancellation was observed during collection.</exception>
+    private static HashSet<(int X, int Y)> GetCandidateCells(
+        BoardState state, CancellationToken cancellationToken)
+        => EnumerateCandidateCells(state, cancellationToken).ToHashSet();
+
+    /// <summary>
+    /// Enumerates living cells and their in-bounds neighbors before duplicate removal.
+    /// </summary>
+    /// <param name="state">The current board state.</param>
+    /// <param name="cancellationToken">The token checked before each candidate is yielded.</param>
+    /// <returns>Candidate coordinates, which may contain duplicates.</returns>
+    /// <exception cref="OperationCanceledException">Cancellation was observed during enumeration.</exception>
+    internal static IEnumerable<(int X, int Y)> EnumerateCandidateCells(
+        BoardState state, CancellationToken cancellationToken)
     {
-        var candidates = new HashSet<(int X, int Y)>(state.LivingCells);
         foreach (var cell in state.LivingCells)
         {
-            candidates.UnionWith(GetNeighborPositions(state, cell));
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return cell;
+            foreach (var neighbor in GetNeighborPositions(state, cell))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return neighbor;
+            }
         }
-
-        return candidates;
     }
 
     /// <summary>
