@@ -12,6 +12,7 @@ builder.Services.AddSingleton(services => new SqliteBoardStore(
 builder.Services.AddScoped<BoardService>();
 var app = builder.Build();
 
+app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.Services.GetRequiredService<SqliteBoardStore>().Initialize();
 app.MapBoardEndpoints();

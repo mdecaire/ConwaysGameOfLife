@@ -53,6 +53,30 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Reads the current board state and generation from SQLite by identifier.</summary>
+    /// <param name="boardId">The identifier of the board to retrieve.</param>
+    /// <returns>The reconstructed state and generation, or null if the board does not exist.</returns>
+    /// <exception cref="SqliteException">SQLite could not open, configure, or read the database.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The stored coordinate JSON is invalid.</exception>
+    public (BoardState State, long Generation)? Find(Guid boardId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT Width, Height, CurrentState, CurrentGeneration
+            FROM Boards WHERE Id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", boardId.ToString());
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        var state = codec.Decode(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2));
+        return (state, reader.GetInt64(3));
+    }
+
     /// <summary>Opens a connection with foreign-key enforcement and full synchronization enabled.</summary>
     /// <returns>An open connection that the caller must dispose.</returns>
     /// <exception cref="SqliteException">SQLite could not open or configure the connection.</exception>

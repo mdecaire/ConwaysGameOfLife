@@ -12,6 +12,135 @@ namespace GameOfLife.IntegrationTests;
 
 public sealed class BoardUploadTests
 {
+    /// <summary>Verifies that a new store reconstructs the requested upload after the application closes.</summary>
+    /// <returns>A task representing the uploads, application shutdown, and storage reads.</returns>
+    [Fact]
+    public async Task NewStoreRestoresUploadedBoardsAfterApplicationCloses()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"game-of-life-{Guid.NewGuid():N}.db");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false
+        }.ToString();
+        bool[][] firstCells = [[false, true, false, false], [true, false, false, true]];
+        bool[][] secondCells = [[false, false, true]];
+        var boardIds = new List<Guid>();
+
+        try
+        {
+            using (var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["ConnectionStrings:Boards"] = connectionString
+                    }))))
+            using (var client = factory.CreateClient())
+            {
+                foreach (var cells in new[] { firstCells, secondCells })
+                {
+                    using var response = await client.PostAsJsonAsync("/api/boards", new { cells });
+                    Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+                    using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                    boardIds.Add(body.RootElement.GetProperty("boardId").GetGuid());
+                }
+            }
+
+            var store = new SqliteBoardStore(connectionString, new BoardStateCodec());
+            var second = store.Find(boardIds[1]);
+            Assert.True(second.HasValue);
+            Assert.Equal(3, second.Value.State.Width);
+            Assert.Equal(1, second.Value.State.Height);
+            Assert.True(second.Value.State.LivingCells.SetEquals(new[] { (2, 0) }));
+            Assert.Equal(0L, second.Value.Generation);
+
+            var first = store.Find(boardIds[0]);
+            Assert.True(first.HasValue);
+            Assert.Equal(4, first.Value.State.Width);
+            Assert.Equal(2, first.Value.State.Height);
+            Assert.True(first.Value.State.LivingCells.SetEquals(new[] { (1, 0), (0, 1), (3, 1) }));
+            Assert.Equal(0L, first.Value.Generation);
+        }
+        finally
+        {
+            File.Delete(databasePath);
+            File.Delete(databasePath + "-wal");
+            File.Delete(databasePath + "-shm");
+        }
+    }
+
+    /// <summary>Verifies that a real SQLite insert failure produces a sanitized error and no saved board.</summary>
+    /// <param name="environment">The hosting environment in which error sanitization is verified.</param>
+    /// <returns>A task representing the failed upload and database assertions.</returns>
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    public async Task FailedInsertReturnsSanitizedProblemWithoutPersistingBoard(string environment)
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"game-of-life-{Guid.NewGuid():N}.db");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false
+        }.ToString();
+
+        try
+        {
+            using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment(environment);
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["ConnectionStrings:Boards"] = connectionString
+                    }));
+            });
+            using var client = factory.CreateClient();
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TRIGGER RejectBoardInsert BEFORE INSERT ON Boards
+                    BEGIN
+                        SELECT RAISE(ABORT, 'upload-write-failure-secret');
+                    END;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            using var response = await client.PostAsJsonAsync("/api/boards", new
+            {
+                cells = new[] { new[] { true, false }, new[] { false, true } }
+            });
+
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            var responseText = await response.Content.ReadAsStringAsync();
+            using var body = JsonDocument.Parse(responseText);
+            Assert.Equal(500, body.RootElement.GetProperty("status").GetInt32());
+            Assert.False(body.RootElement.TryGetProperty("boardId", out _));
+            Assert.DoesNotContain("upload-write-failure-secret", responseText);
+            Assert.DoesNotContain(Path.GetFileName(databasePath), responseText);
+            Assert.DoesNotContain("SqliteException", responseText);
+            Assert.DoesNotContain("INSERT INTO", responseText);
+            Assert.DoesNotContain("RejectBoardInsert", responseText);
+            Assert.DoesNotContain("stackTrace", responseText, StringComparison.OrdinalIgnoreCase);
+
+            using var verification = new SqliteConnection(connectionString);
+            verification.Open();
+            using var count = verification.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM Boards";
+            Assert.Equal(0L, count.ExecuteScalar());
+        }
+        finally
+        {
+            File.Delete(databasePath);
+            File.Delete(databasePath + "-wal");
+            File.Delete(databasePath + "-shm");
+        }
+    }
+
     /// <summary>Verifies that JSON binding failures return a bad-request problem without persistence in Production.</summary>
     /// <param name="json">Malformed JSON or an upload containing a non-boolean cell value.</param>
     /// <returns>A task representing the invalid upload and database assertions.</returns>
