@@ -1,8 +1,10 @@
 # Conway’s Game of Life API implementation plan
 
+> Current implementation status (Slice 4 handoff): Slices 1-4 are implemented; Slice 4 awaits developer review. The approved implementation request supersedes the older documentation-only/proposed wording below for Slice 4. Both retrieval endpoints accept nonnegative Int64 quantities, reject parse/addition overflow with 400, and propagate cancellation. No retrieval computation cap is approved or enforced; the old provisional 10,000 proposal applies only to future final-state review. No data was deleted or migrated. Slice 5 remains unstarted.
+
 ## 1. Baseline and architecture
 
-The complete `GAME_OF_LIFE_DESIGN_UPDATED.md` has been read, and the supplied AGENTS.md instructions apply. Slices 1–3 are complete: the finite-board generation engine, minimal System.Text.Json coordinate serialization, and durable board upload. Slice 4 is restarting with a proposed generation-contract revision from the supplied `SLICE_4_GENERATION_CONTRACT_PLAN.md`. This documentation-only diff awaits review and authorizes no source, test, dependency, or schema changes. Retain 11 numbered slices, with proposed implementation milestones 4a-4f below. Unrelated approved decisions remain unchanged. No performance measurements have been performed.
+The complete `GAME_OF_LIFE_DESIGN_UPDATED.md` has been read, and AGENTS.md applies. Slices 1-3 are complete. Slice 4 was approved for implementation by the latest request and milestones 4a-4f are now implemented, awaiting developer review. Retain 11 numbered slices and the existing architecture. No performance measurements have been performed.
 
 Use exactly three minimal `net8.0` projects. No dedicated benchmarking project or framework is required:
 
@@ -105,7 +107,7 @@ Each numbered row is one developer approval boundary. Internal milestones and in
 | 1 | Pure finite-board generation engine | Independent rule/boundary fixtures, orientation, unchanged dimensions, immutable input, and cancellation checks; no HTTP or persistence dependency |
 | 2 | Minimal JSON serialization for durable storage | Use System.Text.Json for living-cell coordinates; retain width/height separately and reconstruct the HashSet. Test empty/populated round trips and clear failure for invalid stored JSON. No custom converters or binary formats |
 | 3 | Minimal Durable Board Upload | Valid asymmetric upload returns `201`, unique ID, correct dimensions/cells and generation 0; real SQLite reconstruction after close/reopen; invalid input and failed-write handling. Only `Boards` and upload DTOs/endpoint/service/storage/initialization needed here; no Location requirement |
-| 4 | Relative preview and absolute-generation retrieval (proposed 4a-4f) | Durable initial state; zero/positive relative and absolute reads; accurate labels; zero engine calls for zero; unchanged persistent values; live-current Location; validation, overflow, budget, cancellation |
+| 4 | Relative preview and absolute-generation retrieval (4a-4f implemented; awaiting review) | Durable initial state; zero/positive relative and absolute reads; accurate labels; zero engine calls for zero; unchanged persistent values; live-current Location; validation, overflow, budget, cancellation |
 | 5 | HTTP Next with atomic state/generation commit | Unchanged InitialState, correct one-step advance, durable restart progress, conditional generation update, rollback, classified errors, and no success before commit; defer bounded concurrency/contention retry handling to Slice 6 |
 | 6 | Concurrent Next and SQLite contention handling | After the SQLite contention/timeout correctness review: concurrent requests produce consecutive committed generations without lost updates; prove authoritative reload/recalculation, bounded conflict/contention handling, no automatic re-advancement after an uncertain commit, and failed-transaction cleanup |
 | 7 | Bounded dictionary-based final search | Use a straightforward dictionary-based algorithm; verify actual board-state equality before identifying a cycle. Verify stable/cycle outcomes, accurate cycle lengths and generation labels, pre-call budget checks, all actual engine calls counted, and cancellation before exposing the endpoint. No competing algorithm is required |
@@ -131,28 +133,53 @@ The completed Slice 3 created only `Boards`, with `Id`, `Width`, `Height`, `Curr
 
 Do not add process-kill simulations, complex fault-injection infrastructure, concurrency test harnesses, or historical-generation tests in Slice 3. The broader later-slice test groups below do not expand this boundary; retain advanced resource/transport coverage for Slice 10.
 
-### Slice 4: Proposed generation-contract implementation milestones
+### Slice 4: Implemented generation retrieval; awaiting developer review
 
-Review this documentation-only diff before any new RED/GREEN cycle. Inspect any already-started Slice 4 work for compatibility before implementation. Use `stepsAhead` for relative queries and `generationNumber` for the absolute path; keep response `generation` unchanged.
+Milestones 4a-4f are complete under one Slice 4 approval, using focused RED -> GREEN cycles. Retain the 11 numbered slices and stop before Slice 5.
 
-Retain 11 master slices. Milestones 4a through 4f are implementation milestones within one Slice 4 approval boundary, not separate developer approval gates. Once Slice 4 is approved for implementation, complete all its behaviors through small RED -> GREEN cycles, continue between milestones without approval pauses, refactor as appropriate, and run all required acceptance and relevant regression tests. STOP and report only after the whole numbered Slice 4 is complete, or earlier if a material design contradiction or blocker requires a new decision. This documentation-only update does not authorize starting Slice 4.
-
-| Milestone | Behavior | Evidence and minimum boundary |
+| Milestone | Implemented behavior | Evidence |
 |---|---|---|
-| 4a | Initial-state persistence preparation | Add InitialState to the existing Boards schema and upload insert; write identical initial/current states at generation 0. Verify both survive closing/reopening file-backed SQLite using the existing codec and direct database assertions. No new production read operation is required for this milestone. |
-| 4b | Relative read, stepsAhead=0 | HTTP returns exact committed current cells, ID, dimensions, and absolute generation, including nonzero seeded progress after reopen; zero engine calls. Reuse current snapshot read. |
-| 4c | Relative positive stepsAhead | Independent expected cells and currentGeneration + stepsAhead; all persisted values unchanged. Reuse engine. Separate invalid-offset/overflow/budget/cancellation cycles as needed. |
-| 4d | Absolute read, generationNumber=0 | Original uploaded cells after current cells change, including SQLite reopen; zero engine calls and no writes. Minimum initial-state read and endpoint. |
-| 4e | Absolute positive generationNumber | Independently checked reconstruction from InitialState with current progress greater than, equal to, or less than target; exact label and unchanged persistent values. Reuse engine and reviewed validation/budget conventions. |
-| 4f | Upload Location and focused contract review | Verify upload, relative preview, absolute retrieval, and the Location header; `/api/boards/{id}/preview?stepsAhead=0` resolves to live current state. Refresh README/plan expectations for these implemented operations. Full five-endpoint verification belongs in Slice 11, after Next (Slice 5) and final-state (Slice 8) exist. |
+| 4a | InitialState added to Boards; one upload insert writes identical initial/current coordinate JSON at generation 0 | Existing upload test now reads and compares both stored fields after app shutdown and SQLite reopen |
+| 4b | Relative zero returns one committed current snapshot | Exact nonzero generation/cells after reopen, zero engine calls, unchanged persistent values |
+| 4c | Relative positive computes from current state and labels current generation + offset | Independent changing glider phases, exact call counts, snapshot retained across an update during calculation, no writes |
+| 4d | Absolute zero returns original upload | Original cells despite changed current state after reopen; zero calls and unchanged persistent values |
+| 4e | Absolute positive always reconstructs from InitialState | Current progress below/equal/above target; exact glider phases, labels, calls, and unchanged persistence |
+| 4f | Upload Location points to live current preview | URI resolves at upload and after seeded progress/app restart; generations/0 still returns original cells |
 
-Milestone 4a is limited to the existing schema/upload insert and the SQLite close/reopen test. Do not add an immutability trigger, migration framework, repository abstraction, or recovery mechanism. Retain the disposable-development-database policy above.
+Validation uses standard Minimal API Guid/Int64 binding. Missing/empty preview offsets, malformed/fractional/unrepresentable counts, negative counts, and invalid IDs return 400 ProblemDetails. Unknown boards return 404. Addition overflow is rejected before engine work; zero at Int64.MaxValue succeeds. Duplicate-query semantics remain deferred.
 
-Both GETs preserve initial/current states and current generation, use existing cancellation support, and return 404 for unknown boards. Relative addition overflow must be rejected before engine work; stepsAhead=0 at the maximum stored generation remains valid. Both zero cases bypass the engine. Use standard ASP.NET Core Minimal API binding. Retain focused missing/empty/malformed/negative/excessive/numeric-overflow validation. Duplicate-query semantics, including identical repeated values, are deferred for later review; no duplicate-query test matrix is required in Slice 4. Add custom parsing only if an actual reviewed contract requirement demonstrably demands it. Proposed overflow/error details remain unresolved.
+The latest approved request removes the proposed retrieval computation budget: both routes are tested beyond 10,000 calls without a numeric cap. Cancellation is checked around reads, between calculations, and during response mapping; the existing engine checks inside calculations. Focused service tests with real SQLite verify cancellation stops after one engine call, accepts the Int64 maximum target before cancellation, and leaves storage unchanged. Elaborate transport/disconnect cancellation remains in Slice 10.
 
-No computation-budget configuration currently exists in code. Preserve the provisional configurable-budget policy for both calculation paths; review configuration/error details before positive-work validation cycles. Do not silently finalize 10,000 or introduce another cap or endpoint-specific computation framework. Specialized concurrent-Next orchestration remains in Slice 6; elaborate expensive-work/disconnect cancellation tests remain in Slice 10. Preserve snapshot consistency.
+Operational concern for review: a large valid generation count can consume CPU and occupy a request thread for a long time, particularly with concurrent callers. The simplest proposed safeguard is a configurable server-controlled request timeout using existing ASP.NET Core request-timeout support and the propagated cancellation token. No timeout value or new guard is implemented pending review. The final-state iteration budget remains a separate future-slice decision.
 
-Keep Slices 5-11 numbered and scoped as before, adding a Slice 5 test that Next leaves InitialState unchanged. Final-state discovery/reuse, SQLite concurrency, and idempotency removal remain unchanged. No snapshots, per-generation persistence, cache, speculative shortcuts/checkpoints, new codecs, migration frameworks, or broad refactoring. Database retention exceptions and this documentation diff require review before implementation; milestones 4a-4f share the numbered Slice 4 completion review.
+InitialState uses the existing JSON codec and no new tables, cache, triggers, migration framework, or advancement infrastructure. Initialize creates the new schema for a fresh database; it does not upgrade an older Boards table. No repository database was present or deleted. Use a fresh disposable database path; non-disposable data requires an explicit migration decision.
+
+Verification: Debug and Release solution runs each passed 23 unit and 47 integration cases. See README for runnable commands, current routes, database setup, and remaining boundaries.
+
+Slice 4 executed TDD evidence (each RED followed directly by implementation and an integration regression run):
+
+| Targeted filter (`FullyQualifiedName~` prefix) | Observed RED | Following GREEN integration total |
+|---|---|---|
+| ValidUploadsReturnUniqueIds | 1 failure: missing InitialState column | 17 passed |
+| PreviewZero | 1 failure: missing route (404) | 18 passed |
+| PreviewCalculates | 2 failures: starting generation returned | 20 passed |
+| InvalidPreview OR PreviewRejects | 2 failures: negative/overflow accepted; 5 binding cases already passed | 27 passed |
+| AbsoluteZero | 1 failure: missing route (404) | 28 passed |
+| AbsolutePositive | 3 failures: generation zero returned | 31 passed |
+| InvalidAbsolute OR MissingBoard OR InvalidBoardId | 1 failure: negative target accepted; 9 cases already passed | 41 passed |
+| UploadLocation | 1 failure: missing header | 42 passed |
+
+Targeted commands used `dotnet test GameOfLife.IntegrationTests --no-restore` with the filters above and `--verbosity minimal` (the first persistence run used quiet, then normal console logging to inspect the missing-column failure). Later runs also used `-m:1 -nr:false -p:UseSharedCompilation=false` to avoid shared-build stalls. Multi-filter expressions used `|` with a complete FullyQualifiedName~ prefix per filter. The first integration regression run had two environmental failures from the Windows Event Log provider denying writes; rerunning with `$env:Logging__EventLog__LogLevel__Default='None'` passed. No production logging configuration was changed.
+
+Five final snapshot/no-old-cap/cancellation cases passed against the existing implementation; no RED is claimed for those already-supported paths. Final commands actually executed with the Event Log override:
+
+```powershell
+dotnet test GameOfLife.sln --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
+dotnet test GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
+git diff --check
+```
+
+Both solution runs: 23 unit + 47 integration cases passed, no skips/failures. Diff whitespace check passed. No new packages or unnecessary infrastructure were identified. The retrieval-budget proposal was deliberately superseded by the latest request; no numeric cap was added. No other scope deviations or functional blockers remain. Review the timeout proposal above before implementing any operational guard.
 
 ## 4. Final performance review and SQLite correctness review
 
@@ -200,4 +227,4 @@ Use separate file-backed SQLite connections and deterministic barriers/events. R
 
 **Remaining review items and compatibility:** Numeric computation/retry limits, evidence for any additional upload limit, the SQLite-contention exhaustion status mapping, deferred duplicate-query semantics/coverage and preview-overflow `400` proposals, and the exact tested Kestrel/ProblemDetails envelope remain explicit review items. Dictionary-based cycle detection and JSON persistence are approved; no algorithm/codec-selection gate remains. The lightweight performance review replaces mandatory comparative benchmarking and broad benchmark workload requirements. The proposed Slice 4 revision changes query naming, initial-state persistence, historical-retrieval deferral, and route count only; all other approved architecture and deferrals remain unchanged. This documentation diff awaits review; milestones 4a-4f are internal to numbered Slice 4.
 
-No application code or tests are authorized by this documentation update. Stop for developer review.
+Slice 4 implementation is complete and awaits developer review. Stop here; Slice 5 requires explicit approval.

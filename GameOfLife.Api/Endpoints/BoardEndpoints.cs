@@ -4,10 +4,18 @@ namespace GameOfLife.Api.Endpoints;
 
 public static class BoardEndpoints
 {
-    /// <summary>Maps the board upload endpoint, returning a created response after persistence.</summary>
+    /// <summary>Maps durable upload and read-only relative/absolute generation endpoints.</summary>
     /// <param name="app">The application on which to register the endpoint.</param>
     public static void MapBoardEndpoints(this WebApplication app)
     {
+        app.MapGet("/api/boards/{id}/preview", (
+            Guid id, long stepsAhead, BoardService service, CancellationToken cancellationToken) =>
+            ReadBoard(() => service.Preview(id, stepsAhead, cancellationToken)));
+
+        app.MapGet("/api/boards/{id}/generations/{generationNumber}", (
+            Guid id, long generationNumber, BoardService service, CancellationToken cancellationToken) =>
+            ReadBoard(() => service.GetGeneration(id, generationNumber, cancellationToken)));
+
         app.MapPost("/api/boards", (
             UploadBoardRequest request, BoardService service, CancellationToken cancellationToken) =>
         {
@@ -22,10 +30,25 @@ public static class BoardEndpoints
 
             var cells = request.Cells!;
             var (boardId, state) = service.Upload(cells, cancellationToken);
-            return Results.Json(new BoardResponse(
-                boardId, 0, state.Width, state.Height, cells),
-                statusCode: StatusCodes.Status201Created);
+            return Results.Created($"/api/boards/{boardId}/preview?stepsAhead=0",
+                new BoardResponse(boardId, 0, state.Width, state.Height, cells));
         });
+    }
+
+    private static IResult ReadBoard(Func<BoardResponse?> read)
+    {
+        try
+        {
+            var board = read();
+            return board is null
+                ? Results.Problem(statusCode: 404, title: "Board not found")
+                : Results.Ok(board);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return Results.Problem(statusCode: 400, title: "Invalid generation",
+                detail: "The generation must be nonnegative and within the supported integer range.");
+        }
     }
 
     /// <summary>Validates that the grid has nonnull rows and nonzero, rectangular dimensions.</summary>

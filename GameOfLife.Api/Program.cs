@@ -1,9 +1,11 @@
 using GameOfLife.Api.Application;
+using GameOfLife.Api.Domain;
 using GameOfLife.Api.Endpoints;
 using GameOfLife.Api.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddProblemDetails();
+builder.Services.AddSingleton<IGenerationEngine, GenerationEngine>();
 builder.Services.AddSingleton<BoardStateCodec>();
 builder.Services.AddSingleton(services => new SqliteBoardStore(
     services.GetRequiredService<IConfiguration>().GetConnectionString("Boards")

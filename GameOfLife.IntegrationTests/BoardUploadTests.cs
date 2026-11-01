@@ -303,7 +303,7 @@ public sealed class BoardUploadTests
             using var connection = new SqliteConnection(connectionString);
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT Id, Width, Height, CurrentState, CurrentGeneration FROM Boards";
+            command.CommandText = "SELECT Id, Width, Height, CurrentState, CurrentGeneration, InitialState FROM Boards";
             using var reader = command.ExecuteReader();
             var storedCount = 0;
             while (reader.Read())
@@ -315,6 +315,7 @@ public sealed class BoardUploadTests
                     reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3));
                 Assert.True(restored.LivingCells.SetEquals(new[] { (1, 0), (0, 1), (3, 1) }));
                 Assert.Equal(0, reader.GetInt64(4));
+                Assert.Equal(reader.GetString(3), reader.GetString(5));
                 storedCount++;
             }
             Assert.Equal(2, storedCount);

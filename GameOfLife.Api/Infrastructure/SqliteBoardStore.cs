@@ -20,6 +20,7 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
                 Id TEXT NOT NULL PRIMARY KEY,
                 Width INTEGER NOT NULL,
                 Height INTEGER NOT NULL,
+                InitialState TEXT NOT NULL,
                 CurrentState TEXT NOT NULL,
                 CurrentGeneration INTEGER NOT NULL
             );
@@ -27,7 +28,7 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Inserts and commits a new board's current state at generation zero.</summary>
+    /// <summary>Atomically inserts identical initial/current states at generation zero.</summary>
     /// <param name="boardId">The unique identifier assigned to the upload.</param>
     /// <param name="state">The board dimensions and living-cell coordinates to persist.</param>
     /// <param name="cancellationToken">The token checked at entry and before executing the insert.</param>
@@ -40,8 +41,8 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Boards (Id, Width, Height, CurrentState, CurrentGeneration)
-            VALUES ($id, $width, $height, $state, $generation);
+            INSERT INTO Boards (Id, Width, Height, InitialState, CurrentState, CurrentGeneration)
+            VALUES ($id, $width, $height, $state, $state, $generation);
             """;
         command.Parameters.AddWithValue("$id", boardId.ToString());
         command.Parameters.AddWithValue("$width", state.Width);
@@ -75,6 +76,19 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
 
         var state = codec.Decode(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2));
         return (state, reader.GetInt64(3));
+    }
+
+    /// <summary>Reconstructs the original uploaded state, independently of current progress.</summary>
+    public BoardState? FindInitial(Guid boardId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Width, Height, InitialState FROM Boards WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", boardId.ToString());
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? codec.Decode(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2))
+            : null;
     }
 
     /// <summary>Opens a connection with foreign-key enforcement and full synchronization enabled.</summary>
