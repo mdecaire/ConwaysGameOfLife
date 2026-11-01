@@ -5,5 +5,5 @@ public sealed class GenerationEngine : IGenerationEngine
     public BoardState CalculateNextGeneration(
         BoardState state,
         CancellationToken cancellationToken = default)
-        => throw new NotImplementedException("Awaiting Slice 1 RED review and approval.");
+        => new BoardState(state.Width, state.Height, new HashSet<(int X, int Y)>());
 }
