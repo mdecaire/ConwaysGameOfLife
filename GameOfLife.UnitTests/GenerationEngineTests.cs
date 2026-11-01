@@ -6,6 +6,68 @@ namespace GameOfLife.UnitTests;
 public sealed class GenerationEngineTests
 {
     /// <summary>
+    /// Verifies that a dead center with four living neighbors stays dead, leaving the diamond unchanged.
+    /// </summary>
+    [Fact]
+    public void CalculateNextGeneration_DeadCellWithFourNeighborsStaysDead()
+    {
+        var originalCells = new[] { (1, 0), (0, 1), (2, 1), (1, 2) };
+        var input = new BoardState(3, 3, new HashSet<(int X, int Y)>(originalCells));
+        var engine = new GenerationEngine();
+
+        var next = engine.CalculateNextGeneration(input);
+
+        Assert.Equal(3, next.Width);
+        Assert.Equal(3, next.Height);
+        Assert.True(next.LivingCells.SetEquals(originalCells));
+        Assert.True(input.LivingCells.SetEquals(originalCells));
+        Assert.NotSame(input.LivingCells, next.LivingCells);
+    }
+
+    /// <summary>
+    /// Verifies that cells with five or eight neighbors die on a full board, leaving its four corners.
+    /// </summary>
+    [Fact]
+    public void CalculateNextGeneration_FullThreeByThreeBoardRetainsOnlyCorners()
+    {
+        var originalCells = new[]
+        {
+            (0, 0), (1, 0), (2, 0),
+            (0, 1), (1, 1), (2, 1),
+            (0, 2), (1, 2), (2, 2)
+        };
+        var input = new BoardState(3, 3, new HashSet<(int X, int Y)>(originalCells));
+        var engine = new GenerationEngine();
+
+        var next = engine.CalculateNextGeneration(input);
+
+        Assert.Equal(3, next.Width);
+        Assert.Equal(3, next.Height);
+        Assert.True(next.LivingCells.SetEquals(new[] { (0, 0), (2, 0), (0, 2), (2, 2) }));
+        Assert.True(input.LivingCells.SetEquals(originalCells));
+        Assert.NotSame(input.LivingCells, next.LivingCells);
+    }
+
+    /// <summary>
+    /// Verifies that a full single-column board retains only its middle cell without out-of-bounds births.
+    /// </summary>
+    [Fact]
+    public void CalculateNextGeneration_SingleColumnRetainsOnlyMiddleCell()
+    {
+        var originalCells = new[] { (0, 0), (0, 1), (0, 2) };
+        var input = new BoardState(1, 3, new HashSet<(int X, int Y)>(originalCells));
+        var engine = new GenerationEngine();
+
+        var next = engine.CalculateNextGeneration(input);
+
+        Assert.Equal(1, next.Width);
+        Assert.Equal(3, next.Height);
+        Assert.Equal((0, 1), Assert.Single(next.LivingCells));
+        Assert.True(input.LivingCells.SetEquals(originalCells));
+        Assert.NotSame(input.LivingCells, next.LivingCells);
+    }
+
+    /// <summary>
     /// Verifies that candidate collection observes cancellation before another neighbor or source cell.
     /// </summary>
     /// <param name="candidatesBeforeCancellation">
