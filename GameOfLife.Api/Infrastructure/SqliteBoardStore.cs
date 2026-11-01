@@ -6,8 +6,26 @@ namespace GameOfLife.Api.Infrastructure;
 /// <summary>Initializes SQLite storage and persists uploaded boards.</summary>
 /// <param name="connectionString">The connection string used for each database operation.</param>
 /// <param name="codec">The codec used to serialize living-cell coordinates.</param>
-public sealed class SqliteBoardStore(string connectionString, BoardStateCodec codec)
+public sealed class SqliteBoardStore
 {
+    private readonly string connectionString;
+    private readonly BoardStateCodec codec;
+    private readonly Func<string, SqliteConnection> createConnection;
+
+    public SqliteBoardStore(string connectionString, BoardStateCodec codec)
+        : this(connectionString, codec, value => new SqliteConnection(value)) { }
+
+    // Enables narrowly scoped real-provider observations/faults in integration tests.
+    internal SqliteBoardStore(string connectionString, BoardStateCodec codec,
+        Func<string, SqliteConnection> createConnection)
+    {
+        var settings = new SqliteConnectionStringBuilder(connectionString) { Cache = SqliteCacheMode.Private };
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(settings.DefaultTimeout);
+        this.connectionString = settings.ToString();
+        this.codec = codec;
+        this.createConnection = createConnection;
+    }
+
     /// <summary>Enables write-ahead logging and creates the Boards table if it does not exist.</summary>
     /// <exception cref="SqliteException">SQLite could not configure or initialize the database.</exception>
     public void Initialize()
@@ -123,7 +141,7 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
     /// <exception cref="SqliteException">SQLite could not open or configure the connection.</exception>
     private SqliteConnection OpenConnection()
     {
-        var connection = new SqliteConnection(connectionString);
+        var connection = createConnection(connectionString);
         try
         {
             connection.Open();

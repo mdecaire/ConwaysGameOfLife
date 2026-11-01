@@ -11,7 +11,10 @@ builder.Services.AddSingleton(services => new SqliteBoardStore(
     services.GetRequiredService<IConfiguration>().GetConnectionString("Boards")
         ?? "Data Source=boards.db",
     services.GetRequiredService<BoardStateCodec>()));
-builder.Services.AddScoped<BoardService>();
+builder.Services.AddScoped(services => new BoardService(
+    services.GetRequiredService<SqliteBoardStore>(),
+    services.GetRequiredService<IGenerationEngine>(),
+    builder.Configuration.GetValue("Next:MaxAttempts", 3)));
 var app = builder.Build();
 
 app.UseExceptionHandler();

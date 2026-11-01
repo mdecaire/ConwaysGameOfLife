@@ -7,5 +7,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.22" />
     <InternalsVisibleTo Include="GameOfLife.UnitTests" />
+    <InternalsVisibleTo Include="GameOfLife.IntegrationTests" />
   </ItemGroup>
 </Project>

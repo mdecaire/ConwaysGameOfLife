@@ -56,8 +56,11 @@ internal sealed class BoardFixture : IDisposable
     private HttpClient? client;
     public Guid Id { get; } = Guid.NewGuid();
     public CountingEngine Engine { get; } = new();
+    public int ProviderTimeoutSeconds { get; set; } = 30;
+    public Func<string, SqliteBoardStore>? CreateStore { get; set; }
     /// <summary>Disables pooling so connections close before temporary-file cleanup.</summary>
-    public string ConnectionString => new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+    public string ConnectionString => new SqliteConnectionStringBuilder
+        { DataSource = path, Pooling = false, DefaultTimeout = ProviderTimeoutSeconds }.ToString();
     /// <summary>Creates a Production test host against the fixture database on first access or after Reopen.</summary>
     public HttpClient Client => client ??= (factory = new WebApplicationFactory<Program>()
         .WithWebHostBuilder(builder =>
@@ -65,7 +68,11 @@ internal sealed class BoardFixture : IDisposable
             builder.UseEnvironment("Production");
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
                 new Dictionary<string, string?> { ["ConnectionStrings:Boards"] = ConnectionString }));
-            builder.ConfigureServices(services => services.AddSingleton<IGenerationEngine>(Engine));
+            builder.ConfigureServices(services =>
+            {
+                services.AddSingleton<IGenerationEngine>(Engine);
+                if (CreateStore is not null) services.AddSingleton(CreateStore(ConnectionString));
+            });
         })).CreateClient();
 
     /// <summary>Creates a 7-by-6 board with original cells and independently seeded current progress.</summary>
@@ -131,12 +138,13 @@ internal sealed class BoardFixture : IDisposable
 
     public sealed class CountingEngine : IGenerationEngine
     {
-        public int Calls { get; private set; }
+        private int calls;
+        public int Calls => Volatile.Read(ref calls);
         /// <summary>Gets or sets a callback invoked with the supplied token after a successful calculation.</summary>
         public Action<CancellationToken>? AfterCalculation { get; set; }
         public BoardState CalculateNextGeneration(BoardState state, CancellationToken cancellationToken = default)
         {
-            Calls++;
+            Interlocked.Increment(ref calls);
             var next = new GenerationEngine().CalculateNextGeneration(state, cancellationToken);
             AfterCalculation?.Invoke(cancellationToken);
             return next;

@@ -152,7 +152,7 @@ public sealed class BoardNextTests
     }
 
     [Fact]
-    public async Task StaleNextReturnsConflictWithoutOverwritingTheCommittedWinnerOrRetrying()
+    public async Task RepeatedGenerationConflictsExhaustThreeAttemptsWithoutOverwritingTheWinner()
     {
         using var fixture = new BoardFixture();
         fixture.Seed(Phases[0], Phases[0], 0);
@@ -160,17 +160,17 @@ public sealed class BoardNextTests
         fixture.Engine.AfterCalculation = _ =>
         {
             // A real SQLite write between snapshot calculation and the conditional update.
-            fixture.SetCurrent(Phases[2], 2);
+            fixture.SetCurrent(Phases[2], fixture.Engine.Calls + 1);
             winner = fixture.StoredValues();
         };
 
         using var response = await fixture.Client.PostAsync($"/api/boards/{fixture.Id}/next", null);
 
         await AssertProblem(response, HttpStatusCode.Conflict);
-        Assert.Equal(1, fixture.Engine.Calls);
+        Assert.Equal(3, fixture.Engine.Calls);
         Assert.Equal(winner, fixture.StoredValues());
         using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
-        await AssertBoard(current, fixture.Id, 2, Phases[2]);
+        await AssertBoard(current, fixture.Id, 4, Phases[2]);
     }
 
     [Fact]

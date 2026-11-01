@@ -3,27 +3,38 @@ using GameOfLife.Api.Infrastructure;
 
 namespace GameOfLife.Api.Application;
 
-public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engine)
+public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engine, int maxNextAttempts = 3)
 {
-    /// <summary>Calculates once from current state and returns only after the conditional update commits.</summary>
+    private readonly int maxNextAttempts = maxNextAttempts > 0
+        ? maxNextAttempts : throw new ArgumentOutOfRangeException(nameof(maxNextAttempts));
+
+    /// <summary>Reloads and recalculates on verified conflicts, returning only its own committed state.</summary>
     /// <param name="boardId">The identifier of the board to advance.</param>
     /// <param name="cancellationToken">The token checked before calculation, persistence, and response mapping.</param>
     /// <returns>The committed next state, or null if the board was not found.</returns>
-    /// <exception cref="BoardConflictException">The conditional update did not match the starting generation.</exception>
+    /// <exception cref="BoardConflictException">Verified conflicts exhausted the attempt allowance.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The current generation is already at the maximum supported value.</exception>
     /// <exception cref="OperationCanceledException">Cancellation was observed; an already committed update remains durable.</exception>
     public BoardResponse? Next(Guid boardId, CancellationToken cancellationToken = default)
     {
+        for (var attempt = 0; attempt < maxNextAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = store.Find(boardId);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snapshot is not { } board) return null;
+            if (board.Generation == long.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(board.Generation), "The board has reached the maximum generation.");
+            var nextState = engine.CalculateNextGeneration(board.State, cancellationToken);
+            // TryAdvance disposes the attempt before returning false. Exceptions (including
+            // busy/locked and uncertain commits) propagate; they never authorize a retry.
+            if (store.TryAdvance(boardId, nextState, board.Generation, cancellationToken))
+                return ToResponse(boardId, nextState, board.Generation + 1, cancellationToken);
+        }
         cancellationToken.ThrowIfCancellationRequested();
-        var snapshot = store.Find(boardId);
+        var latest = store.Find(boardId);
         cancellationToken.ThrowIfCancellationRequested();
-        if (snapshot is not { } board) return null;
-        if (board.Generation == long.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(board.Generation), "The board has reached the maximum generation.");
-        var nextState = engine.CalculateNextGeneration(board.State, cancellationToken);
-        if (!store.TryAdvance(boardId, nextState, board.Generation, cancellationToken))
-            throw new BoardConflictException();
-        return ToResponse(boardId, nextState, board.Generation + 1, cancellationToken);
+        return latest is null ? null : throw new BoardConflictException();
     }
 
     /// <summary>Calculates an offset from one committed current snapshot without modifying storage.</summary>

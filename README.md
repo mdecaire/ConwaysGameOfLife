@@ -1,6 +1,6 @@
 # Conway's Game of Life API
 
-C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-4 are approved and Slice 5 is implemented, ready for developer review. Conflict retries and final-state discovery remain future work.
+C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-5 are complete; Slice 6 concurrency and bounded contention handling is implemented for developer review. Final-state discovery remains future work.
 
 Run from the repository root:
 
@@ -23,7 +23,7 @@ Retaining non-disposable older data requires an explicit migration policy. Never
 | Method and route | Behavior |
 |---|---|
 | `POST /api/boards` | Upload a nonempty rectangular boolean grid under `cells`; persist initial/current state at generation zero; return `201` with a unique ID |
-| `POST /api/boards/{id}/next` | Calculate once from current state, atomically commit the new state and generation, and return `200`; preserve the original upload |
+| `POST /api/boards/{id}/next` | Advance current state once, atomically commit state and generation, and return `200`; reload and recalculate on verified generation conflicts |
 | `GET /api/boards/{id}/preview?stepsAhead=N` | Calculate N generations from a consistent current snapshot; return its absolute generation without writes |
 | `GET /api/boards/{id}/generations/{generationNumber}` | Reconstruct an absolute generation from the original upload without writes |
 
@@ -35,7 +35,11 @@ Example upload body:
 
 Responses contain `boardId`, `generation`, `width`, `height`, and `cells` indexed by row then column. The finite board never wraps. Upload's `Location: /api/boards/{id}/preview?stepsAhead=0` identifies the live current board. `/generations/0` always identifies the original uploaded configuration. Both zero reads perform no engine calls.
 
-Next calculates outside a short SQLite transaction, then updates current state and generation only when the board ID and expected generation match. Slice 5 returns `409` ProblemDetails for a verified stale generation without retrying; bounded reload-and-recalculate retries are deferred to Slice 6. Unknown boards return `404`, and Next at the maximum generation returns `400` before calculation. Unexpected database failures return sanitized `500`; uncommitted updates roll back. Cancellation is checked before commit, but synchronous SQLite calls cannot be interrupted immediately. Each Next request advances separately, including a repeated client request.
+Next calculates outside a short SQLite transaction, then updates current state and generation only when the board ID and expected generation match. A verified generation conflict disposes the attempt, reloads committed state, and recalculates. `Next:MaxAttempts` (environment variable `Next__MaxAttempts`) defaults provisionally to three total attempts and must be positive. Exhausted verified conflicts return `409` ProblemDetails; an absent board returns `404`. Next at the maximum generation returns `400` before calculation. Each successful request returns its own committed state, even if another request has since advanced the board. The original upload remains unchanged.
+
+Connections use private cache. Set a positive whole-second `Default Timeout` in `ConnectionStrings:Boards` to tune provider waiting (provider default: 30 seconds); zero/unlimited waiting is rejected. Ordinary writer contention uses only the provider's finite command waiting, including implicit BEGIN/COMMIT commands. Busy/locked exceptions are database errors and return sanitized `500`, without an application retry or automatic translation to `409`. Only a zero-row conditional update permits an optimistic retry. The finite attempt count bounds the number of command-wait windows; this is not a hard end-to-end request deadline. See PLAN.md for the wait accounting and deferred exploratory cases.
+
+Uncommitted updates roll back. Exceptions, including commit failures or lost acknowledgements, never cause automatic re-advancement. Cancellation is checked before new attempts/calculations and before commit; synchronous provider waiting returns control before cancellation can be observed. A confirmed commit stays durable after cancellation or response loss. Each Next request advances separately, including a repeated client request.
 
 Generation quantities use nonnegative 64-bit integers. `stepsAhead` is required. Missing/empty query values, malformed/fractional/overflowing quantities, negative values, invalid IDs, and overflowing current-generation-plus-offset return `400` ProblemDetails. Unknown boards return `404` ProblemDetails. Both GETs propagate request cancellation and preserve all stored values.
 
