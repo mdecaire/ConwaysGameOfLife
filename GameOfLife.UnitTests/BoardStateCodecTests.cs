@@ -7,6 +7,7 @@ namespace GameOfLife.UnitTests;
 
 public sealed class BoardStateCodecTests
 {
+    /// <summary>Verifies that an empty board retains its dimensions and absence of living cells.</summary>
     [Fact]
     public void EmptyBoardRoundTrips()
     {
@@ -20,6 +21,7 @@ public sealed class BoardStateCodecTests
         Assert.Empty(restored.LivingCells);
     }
 
+    /// <summary>Verifies that an asymmetric board retains every living coordinate and its dimensions.</summary>
     [Fact]
     public void PopulatedBoardRoundTripsWithoutLosingCoordinates()
     {
@@ -34,6 +36,8 @@ public sealed class BoardStateCodecTests
         Assert.True(restored.LivingCells.SetEquals(cells));
     }
 
+    /// <summary>Verifies that invalid stored coordinate JSON fails explicitly.</summary>
+    /// <param name="json">Malformed, null, or incomplete coordinate JSON.</param>
     [Theory]
     [InlineData("[")]
     [InlineData("null")]

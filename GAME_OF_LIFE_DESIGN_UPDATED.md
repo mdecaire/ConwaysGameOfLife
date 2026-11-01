@@ -32,7 +32,7 @@ The exercise says endpoints are required **at a minimum**. We considered a fifth
 
 **Other explicit exercise constraints:** Board states must survive application restarts or crashes; design should be clean, modular, testable, validated, and resilient; no authentication or authorization required. Evaluated for correctness, code quality, architecture, production readiness, and ability to explain decisions. The exercise indicates roughly **4-5 hours of implementation effort** and favors quality and thoughtful design over perfect or overly complex solutions.
 
-**Additional approved delivery constraint:** The project must be runnable and testable for free from a cloned repository, with no subscription, trial account, hosted cache/database, secrets, or external connection strings. Use local SQLite. Check in the code and repeatable database setup/migrations, not a generated user-data database.
+**Additional approved delivery constraint:** The project must be runnable and testable for free from a cloned repository, with no subscription, trial account, hosted cache/database, secrets, or external connection strings. Use local SQLite. Check in the code and simple reproducible schema initialization, not a generated user-data database. No database migration framework is required or approved.
 
 **Critical interpretive distinction:** The requirements use the English verbs “Get Next State” and “Get N States Ahead”; they do not mandate HTTP `GET`. The approved contract uses `POST` for state-changing advancement, and `GET` for non-advancing retrieval/search.
 
@@ -92,7 +92,7 @@ The labels below reflect decisions made together. “Approved provisionally” m
 ### Decision 5: Durable store versus optional caching; self-contained execution
 **Status: Approved**
 
-- **SQLite is the source of truth** for initial state, current committed state, generation, and successful final-state discovery.
+- **SQLite is the source of truth** for current committed state, generation, and successful final-state discovery. The uploaded board is stored as current state at generation 0; no independent original-board copy is retained after advancement.
 - An in-memory cache may speed up repeated calculations but is **not** durable and must never be the only copy of promised state.
 - **Do not implement `IMemoryCache` initially.** Defer unless actual measurements show a worthwhile benefit. No Redis, hosted cache, or subscription.
 - Cache eviction, service restart, or absence of a cache must not change correctness.
@@ -159,7 +159,7 @@ The labels below reflect decisions made together. “Approved provisionally” m
 
 - **Do not implement** `GET /api/boards/{id}/generations/{generation}` in the take-home solution.
 - Implement only the four endpoints required by the exercise. `N States Ahead` remains a non-mutating preview relative to the current committed generation, not a historical lookup.
-- Continue storing the uploaded initial board and the last committed board for the approved persistence design. Do not calculate or permanently retain every intermediate generation for historical navigation.
+- Store only the current committed board and generation. Do not retain the original upload independently after advancement or store intermediate generations for historical navigation.
 - Consider a historical-generation route as a potential future enhancement only if a real requirement warrants the added cost.
 
 **Rationale:** Replaying from generation 0 to an arbitrary old generation can become expensive and introduces extra response, resource-limiting, and recovery tests. The feature is not required for the coding exercise, so deferring it is a deliberate scope decision.
@@ -215,18 +215,19 @@ The labels below reflect decisions made together. “Approved provisionally” m
 ### Decision 14: SQLite schema, storage, transactions, and codecs
 **Status: Approved provisionally, pending implementation and performance testing**
 
-**Three planned tables:**
+**Three planned tables, introduced incrementally:**
 
-- `Boards`: `Id` (GUID), `Width`, `Height`, `InitialState`, `CurrentState`, `CurrentGeneration`.
-- `FinalStateResults`: Unique `BoardId` (FK), `StartingGeneration`, `ResultGeneration`, `ResultState`, `CycleLength`, `IterationsUsed`, and an optional explicit conclusion kind. **No requirement to match a later current generation** when reading a successful conclusion.
-- `IdempotencyRecords`: Unique `(BoardId, Key)`, committed result generation, saved original response, and durable commit-relative retention/expiry metadata. The approved default is **24 hours from successful transaction commit**, not from request start or an earlier record-creation timestamp. Review the exact timestamp/expiry capture mechanism before implementing keyed advancement; it must meet this contract without changing the locked default.
+- `Boards` (Slice 3 only table): `Id` (GUID), `Width`, `Height`, `CurrentState`, `CurrentGeneration`.
+- `FinalStateResults` (Slice 9): Unique `BoardId` (FK), `StartingGeneration`, `ResultGeneration`, `ResultState`, `CycleLength`, `IterationsUsed`, and an optional explicit conclusion kind. **No requirement to match a later current generation** when reading a successful conclusion.
+- `IdempotencyRecords` (Slice 6): Unique `(BoardId, Key)`, committed result generation, saved original response, and durable commit-relative retention/expiry metadata. The approved default is **24 hours from successful transaction commit**, not from request start or an earlier record-creation timestamp. Review the exact timestamp/expiry capture mechanism before implementing keyed advancement; it must meet this contract without changing the locked default.
 
 **Persistence and encoding:**
 
-- Persist the original board and last committed board, but not intermediate generations. Only Final State endpoint may produce a durable `FinalStateResults` record, and only after success.
+- Persist only the current board and generation; the upload starts at generation 0. Do not retain a separate original state or intermediate generations. Every successful Next still atomically persists the new current state and generation. Only Final State endpoint may produce a durable `FinalStateResults` record, and only after success, starting in Slice 9.
 - **Approved simplification:** Use built-in System.Text.Json to serialize living-cell coordinates as JSON for SQLite persistence. Keep width and height as separate database fields and reconstruct `HashSet<(int X, int Y)>` on deserialization. Use a minimal coordinate data type; no custom converters, serialization frameworks, or unnecessary interfaces.
 - Custom binary encoding and alternative-codec implementation/benchmarks are **deferred unless actual performance measurements demonstrate that JSON serialization or storage is a meaningful bottleneck**. Their presence in earlier plans does not authorize this work. Retain all other architectural decisions.
-- Create schema reproducibly from checked-in code; no external database service.
+- Use Microsoft.Data.Sqlite directly with parameterized SQL and simple reproducible schema initialization from checked-in code. Create only `Boards` in Slice 3; defer the other tables to their assigned slices. Do not introduce Entity Framework Core, Dapper, other ORMs, or database migration frameworks without explicit approval; no external database service.
+- Preserve separate connections per operation and the approved WAL, foreign-key enforcement, and `synchronous=FULL` durability settings.
 
 **Atomicity and concurrency:**
 
@@ -250,6 +251,8 @@ The labels below reflect decisions made together. “Approved provisionally” m
 
 **Proposed implementation details — pending developer review:**
 
+These retry/replay and concurrency mechanics apply in later slices. Slice 3 implements only minimal upload persistence, resource cleanup, and sanitized failure handling with no success on a failed write. Do not scaffold future service/storage methods, retry frameworks, concurrency coordination, caching, or speculative optimizations in Slice 3.
+
 - Keep this logic in `BoardService` and `SqliteBoardStore` with normal .NET exception handling and small operation-specific methods. No generic retry framework, distributed locks, external service, or background retry worker. Use private-cache, separate connections per attempt; do not share active connections/readers across concurrent requests. Prefer a short non-deferred write transaction after calculation, so the in-transaction key check, conditional update, and idempotency insert are protected without retaining a read transaction during simulation.
 - Use one bounded operation retry loop with a configurable retry count and finite database-wait budget. Check the retained key before every retry and before every recalculation, and again inside the write transaction. Before every retry, finish cleanup, open a fresh connection/transaction, and reload authoritative state; never carry a failed attempt's board snapshot into a new calculation.
 - Let Microsoft.Data.Sqlite perform its built-in ordinary busy/locked waits using finite `DefaultTimeout`/`CommandTimeout` settings, including implicit commands such as transaction start. Do not add a second sleep/backoff loop that restarts a full provider timeout after ordinary contention times out. All attempts, commands, and recovery lookups consume the same bounded operation budget; account for provider timeout granularity when documenting the effective bound. Retry counts, timeouts, and the total wait bound remain configurable and subject to the SQLite contention/timeout correctness review; no numeric defaults are selected here.
@@ -270,7 +273,7 @@ The labels below reflect decisions made together. “Approved provisionally” m
 
 | HTTP method | Route | Effect |
 | --- | --- | --- |
-| `POST` | `/api/boards` | Upload initial grid and create a new simulation ID; do not compute final state |
+| `POST` | `/api/boards` | Slice 3: persist uploaded grid as current state at generation 0; return `201` and a unique board ID with common state data; no Location requirement until Slice 4; do not compute final state |
 | `POST` | `/api/boards/{id}/next` | Advance once and commit the new current state |
 | `GET` | `/api/boards/{id}/preview?n=3` | Return N generations ahead of current without committing or computing final state |
 | `GET` | `/api/boards/{id}/final-state` | **Look up a stored successful conclusion first**; compute/persist it only on a miss; do not advance the board |
@@ -282,30 +285,28 @@ The labels below reflect decisions made together. “Approved provisionally” m
 ```json
 {
   "cells": [
-    [false, true, false],
-    [false, true, false],
-    [false, true, false]
+    [false, true, false, false],
+    [true, false, false, true]
   ]
 }
 ```
 
-**Common board-state response shape:**
+**Common board-state response shape (Slice 3 upload example, HTTP `201 Created`; no Location header required):**
 
 ```json
 {
   "boardId": "00000000-0000-0000-0000-000000000000",
-  "generation": 3,
-  "width": 3,
-  "height": 3,
+  "generation": 0,
+  "width": 4,
+  "height": 2,
   "cells": [
-    [false, true, false],
-    [false, true, false],
-    [false, true, false]
+    [false, true, false, false],
+    [true, false, false, true]
   ]
 }
 ```
 
-- Upload returns `201 Created` with the new board ID and generation 0. The older plan's `Location` pointing to `/generations/0` is **superseded** because that route is deferred. If a `Location` header is included, use a supported live-state URI such as `/api/boards/{id}/preview?n=0`, which represents the **current** board and does not guarantee immutable access to generation 0 later. Exact header convention can be reviewed with the HTTP tests.
+- Slice 3 upload returns `201 Created` with the generated board ID, correct dimensions, generation 0, and cells using the common board-state response. No `Location` header is required in Slice 3. In Slice 4, when preview becomes available, add `Location: /api/boards/{id}/preview?n=0` to upload responses and verify that it resolves. This URI represents the **current** board and does not guarantee immutable access to generation 0 later; no historical Location URI is supported.
 - Next and preview use the common state DTO with absolute generation numbers. Final State retains the existing fields `generation`, `startingGeneration`, `conclusionKind`, `cycleLength`, and `iterationsUsed` alongside the board configuration. Return the verified stable configuration or any verified member of the repeating cycle, with accurate absolute generation, period, and **actual engine calls used when the stored result was discovered**. No canonical or first-repeated representative is required. Preserve saved responses unchanged and do not imply that the cached representative is always later than today's current generation.
 - Validate nonempty rectangular boolean grids; reject `null`, jagged and malformed JSON, invalid IDs, and out-of-range dimensions. Limits and body-size safeguards are configurable; **1,024 x 1,024 remains a testing baseline, not a final ceiling**.
 - **Resource-protection verification:** Configure Kestrel's request-body limit before body reading/JSON binding, using existing ASP.NET Core facilities. For a known oversized `Content-Length`, reject before deserializing the grid; retain server enforcement for chunked/unknown-length bodies, stopping when the limit is crossed without buffering the full upload. Some bounded reading/parsing is unavoidable for unknown-length bodies; do not promise zero allocation. Verify these paths with actual Kestrel, not only TestServer. Numeric payload, dimension, and cell-count limits remain provisional/configurable pending developer review informed by the lightweight performance sanity check; small test overrides are not production defaults.
@@ -335,6 +336,33 @@ The labels below reflect decisions made together. “Approved provisionally” m
 ## C. Test strategy to turn into a reviewed implementation plan
 
 The decisions above name required tests. Consolidate them into a focused suite, **not one redundant test per decision paragraph**. Challenge assertions against realistic incorrect implementations before approving each TDD slice.
+
+### Slice 3: Minimal Durable Board Upload — approved implementation and test boundary
+
+Retain the existing 12-slice structure in `PLAN.md`. Slice 3 has only these responsibilities:
+
+1. Accept a valid rectangular boolean grid through `POST /api/boards`.
+2. Validate basic board structure and configured resource safeguards.
+3. Convert the request into the existing `BoardState` representation.
+4. Persist the board in SQLite at generation 0 using the existing System.Text.Json living-cell coordinate serialization.
+5. Return `201 Created` with the generated board ID and common state response data; no Location header is required until Slice 4.
+6. Reopen the database and reconstruct the stored board correctly.
+7. Return an appropriate sanitized error and no successful upload response when persistence fails.
+
+Create only `Boards` with `Id`, `Width`, `Height`, `CurrentState`, and `CurrentGeneration`. Introduce only the endpoint, DTOs, service operations, storage operations, and simple reproducible initialization needed for this slice. Use Microsoft.Data.Sqlite directly with parameterized SQL and the approved durability settings. Do not introduce a migration framework or scaffold future endpoints/methods. `IdempotencyRecords` is deferred until Slice 6; `FinalStateResults` until Slice 9. Do not implement retry frameworks, concurrency coordination, caching, or speculative performance optimizations. Preserve basic configurable resource protection without arbitrary hard-coded board-dimension ceilings; defer numerical tuning until justified.
+
+**Focused Slice 3 acceptance tests:**
+
+1. Valid asymmetric upload returns `201`, a unique board ID, correct dimensions/cells, and generation 0.
+2. Invalid requests are rejected, including null, empty, jagged, and malformed grids; cover configured basic safeguards.
+3. After closing and reopening real file-backed SQLite, retrieve through the storage layer and reconstruct identical dimensions, living cells, and generation. No public read endpoint is needed before Slice 4.
+4. A failed database write returns an appropriate error, never a successful upload response.
+
+Use the existing incremental TDD workflow: implement one focused behavior at a time, execute RED tests and report the expected failure, continue directly to GREEN, run targeted tests and relevant regressions, and stop for explicit developer review before refactoring or the next change. Do not add process-kill simulations, complex fault-injection infrastructure, concurrency test harnesses, or historical-generation tests in Slice 3.
+
+### Cross-slice test strategy
+
+The suite below spans the full implementation; it does not expand Slice 3. Add tests with their corresponding slices in `PLAN.md`; retain advanced resource/transport coverage for Slice 11. Verify the upload Location header in Slice 4 when preview becomes available. Stateful advancement, atomic state/generation updates, later durable lookup-first final results, cancellation, and computation-budget safeguards remain required.
 
 1. **Pure engine unit tests:** Moore-neighborhood rules (birth at 3, survival at 2/3, death otherwise); all-dead, block, blinker, and other known patterns; sparse coordinates, 1x1 / 1xN / Nx1 / asymmetric grids, boundaries, immutable input, and exact expected configurations derived independently.
 2. **Cycle and internal-budget tests:** Stable period 1, oscillators of period >1, transient then cycle, exact collision-safe equality, cancellation, success and exhaustion at the **actual generation-engine call count** boundary. Independently verify that each returned representative belongs to the eventual stable state/cycle, matches its claimed generation, and reports the exact period and engine-call count. Reject transient representatives, inaccurate labels/periods, and uncounted extra calculations; do not require a canonical representative or a competing algorithm.
@@ -366,7 +394,7 @@ Use an independent correctness oracle where possible. Assert exact cell configur
 4. **Persistence serialization (resolved):** Minimal System.Text.Json coordinate serialization is approved; width/height remain separate. Custom binary encoding and alternative-codec comparisons are deferred unless measurements demonstrate a meaningful JSON serialization or storage bottleneck. No codec-selection gate is required for the JSON implementation.
 5. **Commit-relative retention metadata:** The configurable **24-hour default from successful commit is locked**, as are pre-expiry replay, reuse at/after expiry, and transactional cleanup without a background service. Review only the durable timestamp/expiry capture mechanism; do not substitute request-start or pre-commit insertion time for the approved commit anchor.
 6. **SQLite retry implementation and tuning:** Review the proposed mechanics/classification in Decision 14 and validate the configurable retry count, provider timeout, and effective total wait bound in the retained SQLite contention/timeout correctness review. The proposed `409` mapping for identified SQLite contention exhaustion requires explicit developer approval. Retry eligible concurrency failures only; unexpected failures and uncertain commits are not blind-retry cases. No numeric values are locked here.
-7. **HTTP Location header:** The former immutable generation-0 resource is deferred. If present, use a supported live-current URI; do not promise historical access. Finalize the header convention in API tests.
+7. **HTTP Location header (resolved):** No Location requirement in Slice 3. Add `Location: /api/boards/{id}/preview?n=0` in Slice 4 when the read endpoint exists; verify it resolves to live current state, not immutable generation-0 history.
 8. **Optional cache:** Do not implement `IMemoryCache` initially; `FinalStateResults` is approved *durable memoization*, not a general cache.
 9. **Performance fallback:** Do not silently change the approved rectangular JSON API or introduce extra services if dense boards strain resources. Present measured tradeoffs for developer approval.
 

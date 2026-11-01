@@ -234,6 +234,7 @@ public sealed class GenerationEngineTests
         Assert.True(input.LivingCells.SetEquals(originalCells));
     }
 
+    /// <summary>Verifies that a still-life block survives unchanged with three neighbors per cell.</summary>
     [Fact]
     public void CalculateNextGeneration_LiveCellsWithThreeNeighborsSurvive()
     {
@@ -249,6 +250,7 @@ public sealed class GenerationEngineTests
         Assert.True(input.LivingCells.SetEquals(expectedCells));
     }
 
+    /// <summary>Verifies that only the middle cell of a three-cell row survives with two neighbors.</summary>
     [Fact]
     public void CalculateNextGeneration_LiveCellWithTwoNeighborsSurvives()
     {
@@ -266,6 +268,7 @@ public sealed class GenerationEngineTests
         Assert.True(input.LivingCells.SetEquals(new[] { (0, 0), (1, 0), (2, 0) }));
     }
 
+    /// <summary>Verifies that an isolated cell dies while the input and board dimensions remain unchanged.</summary>
     [Fact]
     public void CalculateNextGeneration_IsolatedLiveCellDiesWithoutChangingInputOrDimensions()
     {
