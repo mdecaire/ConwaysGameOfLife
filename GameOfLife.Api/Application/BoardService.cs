@@ -3,12 +3,36 @@ using GameOfLife.Api.Infrastructure;
 
 namespace GameOfLife.Api.Application;
 
-/// <summary>Coordinates board upload and read-only generation calculations.</summary>
-/// <param name="store">The SQLite store for uploaded boards.</param>
-/// <param name="engine">The finite-board generation engine.</param>
 public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engine)
 {
+    /// <summary>Calculates once from current state and returns only after the conditional update commits.</summary>
+    /// <param name="boardId">The identifier of the board to advance.</param>
+    /// <param name="cancellationToken">The token checked before calculation, persistence, and response mapping.</param>
+    /// <returns>The committed next state, or null if the board was not found.</returns>
+    /// <exception cref="BoardConflictException">The conditional update did not match the starting generation.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The current generation is already at the maximum supported value.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was observed; an already committed update remains durable.</exception>
+    public BoardResponse? Next(Guid boardId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = store.Find(boardId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (snapshot is not { } board) return null;
+        if (board.Generation == long.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(board.Generation), "The board has reached the maximum generation.");
+        var nextState = engine.CalculateNextGeneration(board.State, cancellationToken);
+        if (!store.TryAdvance(boardId, nextState, board.Generation, cancellationToken))
+            throw new BoardConflictException();
+        return ToResponse(boardId, nextState, board.Generation + 1, cancellationToken);
+    }
+
     /// <summary>Calculates an offset from one committed current snapshot without modifying storage.</summary>
+    /// <param name="boardId">The identifier of the board to preview.</param>
+    /// <param name="stepsAhead">The nonnegative number of generations to calculate from current state.</param>
+    /// <param name="cancellationToken">The token checked around the read, during calculation, and during response mapping.</param>
+    /// <returns>The preview with its absolute generation, or null if the board was not found.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The offset is negative or its addition would overflow the generation.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was observed.</exception>
     public BoardResponse? Preview(Guid boardId, long stepsAhead, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -23,6 +47,12 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
     }
 
     /// <summary>Reconstructs an absolute generation from the original upload without modifying storage.</summary>
+    /// <param name="boardId">The identifier of the uploaded board.</param>
+    /// <param name="generationNumber">The nonnegative generation index measured from the original upload.</param>
+    /// <param name="cancellationToken">The token checked around the read, during calculation, and during response mapping.</param>
+    /// <returns>The reconstructed generation, or null if the board was not found.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The requested generation is negative.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was observed.</exception>
     public BoardResponse? GetGeneration(Guid boardId, long generationNumber, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -33,6 +63,12 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
             Calculate(state, generationNumber, cancellationToken), generationNumber, cancellationToken);
     }
 
+    /// <summary>Applies the generation engine the requested number of times without persisting results.</summary>
+    /// <param name="state">The starting state.</param>
+    /// <param name="steps">The validated nonnegative number of engine calls; zero returns the starting state.</param>
+    /// <param name="cancellationToken">The token checked between calls and passed to the engine.</param>
+    /// <returns>The calculated state after the requested number of steps.</returns>
+    /// <exception cref="OperationCanceledException">Cancellation was observed.</exception>
     private BoardState Calculate(BoardState state, long steps, CancellationToken cancellationToken)
     {
         for (long step = 0; step < steps; step++)

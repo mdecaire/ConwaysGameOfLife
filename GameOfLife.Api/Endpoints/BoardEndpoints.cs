@@ -4,17 +4,21 @@ namespace GameOfLife.Api.Endpoints;
 
 public static class BoardEndpoints
 {
-    /// <summary>Maps durable upload and read-only relative/absolute generation endpoints.</summary>
+    /// <summary>Maps durable upload, stateful advancement, and read-only generation endpoints.</summary>
     /// <param name="app">The application on which to register the endpoint.</param>
     public static void MapBoardEndpoints(this WebApplication app)
     {
         app.MapGet("/api/boards/{id}/preview", (
             Guid id, long stepsAhead, BoardService service, CancellationToken cancellationToken) =>
-            ReadBoard(() => service.Preview(id, stepsAhead, cancellationToken)));
+            ExecuteBoard(() => service.Preview(id, stepsAhead, cancellationToken)));
 
         app.MapGet("/api/boards/{id}/generations/{generationNumber}", (
             Guid id, long generationNumber, BoardService service, CancellationToken cancellationToken) =>
-            ReadBoard(() => service.GetGeneration(id, generationNumber, cancellationToken)));
+            ExecuteBoard(() => service.GetGeneration(id, generationNumber, cancellationToken)));
+
+        app.MapPost("/api/boards/{id}/next", (
+            Guid id, BoardService service, CancellationToken cancellationToken) =>
+            ExecuteBoard(() => service.Next(id, cancellationToken)));
 
         app.MapPost("/api/boards", (
             UploadBoardRequest request, BoardService service, CancellationToken cancellationToken) =>
@@ -35,14 +39,23 @@ public static class BoardEndpoints
         });
     }
 
-    private static IResult ReadBoard(Func<BoardResponse?> read)
+    /// <summary>Maps a board operation's result, validation failure, or optimistic conflict to an HTTP response.</summary>
+    /// <param name="execute">The operation returning a board response, or null when the board is missing.</param>
+    /// <returns>A successful board response or a 400, 404, or 409 ProblemDetails response.</returns>
+    /// <remarks>Unexpected exceptions and cancellation propagate to the existing middleware.</remarks>
+    private static IResult ExecuteBoard(Func<BoardResponse?> execute)
     {
         try
         {
-            var board = read();
+            var board = execute();
             return board is null
                 ? Results.Problem(statusCode: 404, title: "Board not found")
                 : Results.Ok(board);
+        }
+        catch (BoardConflictException)
+        {
+            return Results.Problem(statusCode: 409, title: "Board changed",
+                detail: "The board changed while the next generation was being calculated.");
         }
         catch (ArgumentOutOfRangeException)
         {

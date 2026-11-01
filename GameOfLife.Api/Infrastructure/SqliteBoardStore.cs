@@ -91,6 +91,33 @@ public sealed class SqliteBoardStore(string connectionString, BoardStateCodec co
             : null;
     }
 
+    public bool TryAdvance(Guid boardId, BoardState nextState, long expectedGeneration,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var nextGeneration = checked(expectedGeneration + 1);
+        var encodedState = codec.Encode(nextState);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = OpenConnection();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE Boards SET CurrentState = $state, CurrentGeneration = $generation
+            WHERE Id = $id AND CurrentGeneration = $expectedGeneration;
+            """;
+        command.Parameters.AddWithValue("$id", boardId.ToString());
+        command.Parameters.AddWithValue("$state", encodedState);
+        command.Parameters.AddWithValue("$generation", nextGeneration);
+        command.Parameters.AddWithValue("$expectedGeneration", expectedGeneration);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (command.ExecuteNonQuery() == 0) return false;
+        cancellationToken.ThrowIfCancellationRequested();
+        transaction.Commit();
+        return true;
+    }
+
     /// <summary>Opens a connection with foreign-key enforcement and full synchronization enabled.</summary>
     /// <returns>An open connection that the caller must dispose.</returns>
     /// <exception cref="SqliteException">SQLite could not open or configure the connection.</exception>
