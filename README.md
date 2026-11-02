@@ -1,6 +1,6 @@
 # Conway's Game of Life API
 
-C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-7 are complete; Slice 8 final-state HTTP discovery and durable result reuse are implemented for developer review.
+C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-9 are reviewed; Slice 10 HTTP/resource coverage is complete for developer review.
 
 Run from the repository root:
 
@@ -19,6 +19,8 @@ dotnet run --project GameOfLife.Api -- --urls http://localhost:5000
 ```
 
 Retaining non-disposable older data requires an explicit migration policy. Never infer original cells from an advanced current state.
+
+**Request size limit:** The API enforces a configurable maximum HTTP request body size through Kestrel. Requests exceeding this limit are rejected with HTTP 413 (Payload Too Large). For chunked transfers, framing overhead counts toward the limit, so the maximum accepted payload size may vary by transfer encoding.
 
 | Method and route | Behavior |
 |---|---|
@@ -44,13 +46,13 @@ Uncommitted updates roll back. Exceptions, including commit failures or lost ack
 
 Generation quantities use nonnegative 64-bit integers. `stepsAhead` is required. Missing/empty query values, malformed/fractional/overflowing quantities, negative values, invalid IDs, and overflowing current-generation-plus-offset return `400` ProblemDetails. Unknown boards return `404` ProblemDetails. Both GETs propagate request cancellation and preserve all stored values.
 
-There is no approved numeric retrieval computation cap. Tests exercise 10,001 calls on both routes. Large counts can occupy CPU and a request thread until cancellation. A configurable server request timeout is proposed for developer review; no timeout value or new generation limit has been introduced. The domain final-state search defaults provisionally to 10,000 actual engine calls, with an internal-only override. It returns Stable, Cycle, or Inconclusive with exact generation/period/call metadata, verifying living-cell equality after fingerprint lookup. This limit applies only to final-state discovery. Real Kestrel payload-boundary and elaborate disconnect tests remain in Slice 10.
+There is no approved numeric retrieval computation cap. Tests exercise 10,001 calls on both routes. Large counts can occupy CPU and a request thread until cancellation. A configurable server request timeout is proposed for developer review; no timeout value or new generation limit has been introduced. The domain final-state search defaults provisionally to 10,000 actual engine calls, with an internal-only override. It returns Stable, Cycle, or Inconclusive with exact generation/period/call metadata, verifying living-cell equality after fingerprint lookup. This limit applies only to final-state discovery. Real Kestrel tests cover request-size boundaries and server-observed disconnect cancellation for both retrieval routes and uncached Final State. Disconnected clients are not guaranteed an HTTP error response.
 
 Request Final State with `GET http://localhost:5000/api/boards/{id}/final-state` (replace `{id}` with the uploaded ID). A successful `200` response contains the common board fields plus `startingGeneration`, `conclusionKind`, `cycleLength`, and `iterationsUsed`. `Stable` means the verified configuration repeats every generation (`cycleLength: 1`); `Cycle` means the returned configuration belongs to a verified repeating orbit with a longer period. `generation` labels that representative on the original discovery trajectory. For example, a block discovered from generation 5 returns generation 6, startingGeneration 5, conclusionKind `Stable`, cycleLength 1, and iterationsUsed 1; a blinker from generation 5 returns its repeated phase at generation 7 with kind `Cycle`, period 2, and two iterations.
 
 Final State checks SQLite before any generation calculations. Startup adds `FinalStateResults` alongside an existing compatible `Boards` table. Successful conclusions use the existing coordinate codec and are committed atomically, with one unique result per board. Later requests return the original configuration and metadata with zero new engine calls, including after application restart and Next. Saved `iterationsUsed` remains the original discovery count, and saved `generation` may be less than the board's later current generation. Upload, Next, preview, and absolute retrieval do not discover or populate final results.
 
-An uncached search uses the provisional internal limit of 10,000 actual engine calls. If no conclusion can be proved within that limit, Final State returns `422` ProblemDetails and saves nothing. A supplied `maxIterations` query parameter (including empty values) returns `400`; unknown boards return `404`. Unexpected persistence failures use sanitized `500` handling. Failed discoveries and cancellation observed before commit save no result and leave current progress unchanged. Cancellation after a confirmed commit preserves the saved conclusion. Simultaneous discovery/interleaving coverage remains in Slice 9.
+An uncached search uses the provisional internal limit of 10,000 actual engine calls. If no conclusion can be proved within that limit, Final State returns `422` ProblemDetails and saves nothing. A supplied `maxIterations` query parameter (including empty values) returns `400`; unknown boards return `404`. Unexpected persistence failures use sanitized `500` handling. Failed discoveries and cancellation observed before commit save no result and leave current progress unchanged. Cancellation after a confirmed commit preserves the saved conclusion. Tests cover simultaneous discovery and interleavings with Next.
 
 Before running tests on Windows accounts without Event Log write permission, disable that provider for the test process so intentional failed-write tests can exercise exception handling:
 

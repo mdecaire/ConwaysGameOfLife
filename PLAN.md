@@ -1,6 +1,6 @@
 # Conway’s Game of Life API implementation plan
 
-> Current implementation status (Slice 9 handoff): Slices 1-8 are complete and reviewed under the latest request. Slice 9 concurrent final-state discovery coverage is complete for developer review; existing production code passed unchanged. Stop before Slice 10.
+> Current implementation status: Slices 1-9 are complete and reviewed. Slice 10 HTTP/resource coverage is complete for developer review, including the approved native Kestrel chunk-accounting distinction. Stop before Slice 11.
 
 ## 1. Baseline and architecture
 
@@ -304,3 +304,44 @@ Use separate file-backed SQLite connections and deterministic barriers/events. R
 **Remaining review items and compatibility:** Numeric computation/retry limits, evidence for any additional upload limit, the SQLite-contention exhaustion status mapping, deferred duplicate-query semantics/coverage and preview-overflow `400` proposals, and the exact tested Kestrel/ProblemDetails envelope remain explicit review items. Dictionary-based cycle detection and JSON persistence are approved; no algorithm/codec-selection gate remains. The lightweight performance review replaces mandatory comparative benchmarking and broad benchmark workload requirements. The proposed Slice 4 revision changes query naming, initial-state persistence, historical-retrieval deferral, and route count only; all other approved architecture and deferrals remain unchanged. This documentation diff awaits review; milestones 4a-4f are internal to numbered Slice 4.
 
 Slices 1-6 are complete. Slice 7 is implemented for developer review under the latest focused request; its handoff above records the scope and evidence. Stop here; Slice 8 requires explicit approval.
+
+## Slice 10 handoff: HTTP and resource coverage
+
+Slice 10 is complete for developer review. No production changes were necessary. Changed files: `KestrelFixture.cs`, `KestrelResourceTests.cs`, `KestrelCancellationTests.cs`, `README.md`, and `PLAN.md`. No packages, projects, commits, or pushes were added; Slice 11 has not started.
+
+Reviewed AGENTS.md, this plan and its consolidated acceptance tests, the updated design, production startup/middleware/endpoints, and existing HTTP, validation, cancellation, and resource tests before adding coverage. Baseline Debug passed 53 unit + 82 integration cases. Existing tests already establish representative 400/404/409/422 ProblemDetails, sanitized unexpected 500s in Production/Development, read-only persistence, bounded conflict exhaustion, and pre-commit cancellation/rollback. These were reused rather than duplicated.
+
+### New tests and actual observations
+
+The test-only Kestrel fixture replays the production entry point in Production, uses an ephemeral loopback listener, normal HttpClient, and unique file-backed SQLite with pooling disabled. WebApplicationFactory also starts an unused TestServer bootstrap host. A narrow test-only stream observer measures bytes delivered to binding; it performs no enforcement and does not change the production pipeline. Both hosts stop before cleanup; a bounded cleanup-only retry handles transient Windows file handles. Initial host setup and cleanup failures were test defects and are not claimed as production RED evidence. Explicit transport/server registrations tried during setup were removed.
+
+Twenty-one new integration cases cover:
+
+- **KnownLengthLimitUsesBytesBeforeBindingOrPersistence (3):** Valid UTF-8 asymmetric JSON with a multibyte property and whitespace at 255/256/257 bytes under L=256. Results are 201/201/413. Accepted uploads preserve dimensions/orientation and reach SQLite. Oversized known-length rejection delivers zero body bytes to binding and saves no board.
+- **ChunkedLimitIncludesTheFramesActuallyWritten (6):** Unknown-length HTTP/1.1 requests use controlled writes of either 64 or 256 bytes. The test calculates framing from each actual chunk length (hex prefix, delimiters, terminal chunk), then places the native limit one byte below, equal to, or one byte above that transmitted size. Below rejects with 413/no board; equal/above accept and persist the expected cells. No universal overhead constant is assumed.
+- **StreamedOversizedGridStopsBeforeCompleteBodyReachesBinding (1):** A valid padded 1,024-byte JSON body whose grid alone exceeds L=256 is streamed in 64-byte writes. Kestrel returns 413, the binder receives at most 256 bytes (less than the grid), and no board persists. This proves bounded delivery rather than claiming zero prefix allocation or measuring memory.
+- **ErrorNegotiationPreservesStatusesAndSupportedJsonProblems (5):** Absent Accept, application/json, application/problem+json, */*, and text/html. Supported JSON requests return application/problem+json with matching status for binding 400, missing-board 404, and native 413. Unsupported text/html preserves 400/413 but uses the middleware fallback instead of ProblemDetails. Explicit endpoint 404 problems remain JSON, and valid uploads return application/json/201 even with text/html; no new 406 contract was introduced. Invalid/oversized requests save nothing.
+- **LargeBoardsRoundTripEveryCellThroughHttpAndSqlite (3):** A 65,537-by-1 row and 1,024-by-1,024 sparse/dense boards, with asymmetric markers, under a test-only 16 MiB body limit. Verify dimensions, every returned cell in upload/current-zero/absolute-zero responses, and every stored coordinate through a new SQLite store/connection. The dense fixture is fully alive except three orientation markers; the sparse fixture has three living markers. No expensive generation runs or dimension caps were added. The support baseline remains a baseline, not a maximum.
+- **DisconnectReachesRunningCalculationAndLeavesPersistenceUnchanged (3):** Relative preview, absolute retrieval, and uncached Final State. At the existing engine seam, execute one real 128-by-128 dense calculation, signal completion, and keep that engine call in flight until request cancellation. Cancel HttpClient only after that signal, observe RequestAborted in the server engine, and wait for server-pipeline completion. Exactly one call occurs; current/initial cells and generation remain unchanged; no final result is saved. This proves server observation, not only canceled client awaiting. Watchdogs detect hangs without performance assertions. Existing unit tests deterministically prove cancellation within real candidate enumeration/evaluation; existing service tests prove stopping between calls and pre-commit persistence cancellation. No disconnected-client status is promised. The Slice 9 confirmed-commit mapping decision remains unchanged, with no post-commit test or connection subclass reintroduced.
+
+### Approved transport distinction and TDD evidence
+
+The original payload-only chunked 255/256 acceptance tests produced meaningful RED: real Kestrel returned 413. Controls showed that native accounting includes chunk framing, consistent with [the .NET 8 Kestrel implementation](https://github.com/dotnet/aspnetcore/blob/v8.0.22/src/Servers/Kestrel/Core/src/Internal/Http/Http1ChunkedEncodingMessageBody.cs). The developer explicitly approved retaining native accounting. Tests now calculate the frames for controlled writes and use transmitted-size boundaries; the unchanged known-length cases retain payload-byte boundaries. This is an accepted transport distinction, not an application defect. README includes the exact requested note immediately above the endpoint documentation.
+
+The adjusted transport tests and remaining negotiation/large-board/cancellation tests passed existing production code on their first valid runs; no additional failing production behavior is claimed or manufactured. All work stayed within Slice 10. No custom production body counting, middleware, exception handling, arbitrary limits, serializer, database abstraction, background service, or general fault framework was introduced.
+
+Actual 413 observations on installed ASP.NET Core 8.0.33: the supported JSON paths above return application/problem+json with body status 413. Unsupported Accept can produce a fallback body; server-level failures outside middleware and disconnected/started responses are not guaranteed an envelope. No universal-envelope workaround is needed or implemented.
+
+### Executed verification and deferred work
+
+Focused runs passed: revised transport 12 cases before removing three redundant chunked-payload cases; negotiation 5; large boards 3; disconnect cancellation 3; streamed oversized-grid 1. Final suite contains 10 transport/resource boundary cases plus negotiation/large/cancellation cases listed above. Final commands, with the existing Windows Event Log test-process override `$env:Logging__EventLog__LogLevel__Default='None'`:
+
+```powershell
+dotnet test GameOfLife.sln --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
+dotnet test GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
+git diff --check
+```
+
+Final Debug and Release each passed 53 unit + 103 integration = 156 cases, with zero failures/skips. Whitespace validation passed. No functional blocker remains.
+
+Deferred to Slice 11: lightweight generation/final-search, memory, serialization, and persistence measurements and cleanup/review of provisional operational values. These correctness tests establish no throughput, peak-memory, cancellation-latency, or stress guarantees. The previously proposed request timeout and unbounded retrieval-count operational concern remain for review; no new timeout, generation cap, or board maximum was silently introduced. STOP after Slice 10 for developer review; do not begin Slice 11.
