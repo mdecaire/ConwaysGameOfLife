@@ -1,8 +1,10 @@
-# Slice 11 performance verification
+# Performance measurements
 
-Measured November 1, 2026, against production code at commit `0bcdb81`. Slices 1–10 were already reviewed. This slice measures the existing implementation and executes the existing tests; the final independent repository/code/test-design review remains separate.
+## Baseline
 
-## Environment and method
+Original Slice 11 measurements were taken November 1, 2026, against production code at `0bcdb81`, before direct neighbor counting. The tables in this section are historical measurements, not current-generation-engine results. The separate paired comparison below measures the optimization; its Before rows are independent of these baseline samples. See [README.md](README.md) for current setup, usage, and test commands.
+
+### Environment and method
 
 - Windows 10 x64, build 19045; Intel Core i7-4790K CPU @ 4.00 GHz; eight logical processors visible to .NET. Runtime-reported available memory: 34,308,210,688 bytes (31.95 GiB), not a measurement of free memory. WMI/CIM hardware queries were denied; the CPU name came from the registry.
 - SDK 10.0.403, MSBuild 18.9.15; actual target/runtime **.NET 8.0.33** and ASP.NET Core 8.0.33, x64. Microsoft.Data.Sqlite 8.0.22; native SQLite reported 3.41.2.
@@ -14,7 +16,7 @@ Measured November 1, 2026, against production code at commit `0bcdb81`. Slices 1
 - **End heap growth** is `GC.GetTotalMemory(false)` after minus before an action, with no post-action collection. It includes uncollected garbage, depends on collections during the action, and does not isolate retained dictionary history or peaks. Explicit GC before each sample is outside the timer and does not reproduce normal request GC scheduling.
 - Generation and discovery samples used a 15-second cancellation watchdog; none fired. Dense workloads calculated only one generation per sample. No full-budget populated-million-cell discovery or concurrency/load test was attempted.
 
-## Generation engine
+### Generation engine
 
 Random fixtures use a fresh `Random(1101)` per board, row-major traversal, and `NextDouble() < density`, with target densities 0.25, 0.001, 0.25, 1.0, and 0.001 respectively. Actual counts follow. Each sample calls `CalculateNextGeneration` **once from the same original state**; the three samples are not a three-generation trajectory.
 
@@ -30,7 +32,7 @@ End heap growth was about 2.0 MiB for baseline sparse, 65.3–66.5 MiB for moder
 
 For a small number of generations these results appear reasonable for the exercise on this machine. The larger sparse board completed comfortably; **1,024 × 1,024 is not a maximum**. Low-density random fixtures die immediately, so they establish sparse starting-state cost, not long-lived sparse simulation behavior. Populated boards demonstrate meaningful CPU and allocation costs. Candidate sets, neighbor enumeration/LINQ, and new output sets are likely contributors from the implementation; no allocation profiler was used to assign their individual shares. These measurements do not establish sustained throughput or safe concurrent-request capacity.
 
-## Dictionary-based final-state discovery
+### Dictionary-based final-state discovery
 
 Each sample starts at generation zero, uses the real default 10,000-call budget, and wraps the real engine with a call counter. The counter matched `IterationsUsed` in every observation. All successful generation labels equal the calls below because the starting generation is zero. This measures domain discovery only, excluding persistence, response mapping, and HTTP.
 
@@ -45,9 +47,9 @@ Each sample starts at generation zero, uses the real default 10,000-call budget,
 
 The block uses `(10,10), (11,10), (10,11), (11,11)`; the blinker uses `(10,10), (11,10), (12,10)`. The pulsar is the existing padded fixture in `FinalStateDiscoveryTests`. The R-pentomino starts at `(65,64), (66,64), (64,65), (65,65), (65,66)`. The glider uses the existing default-budget test coordinates `(2,1), (3,2), (1,3), (2,3), (3,3)`, staying clear of the boundary through 10,000 calls. It has not repeated within this budget; this does not mean it can never converge on a finite board.
 
-No significant discovery CPU or memory failure appeared on these fixtures. The transient's 144 MiB cumulative allocation is substantial, but is not 144 MiB of retained states. The existing dictionary stores all distinct observed states until completion; neither the call limit nor these sparse examples establishes a memory bound for heavily populated searches. Leave the provisional 10,000-call value unchanged. The observations do not justify a different cycle detector, fingerprint, or cache.
+No significant discovery CPU or memory failure appeared on these fixtures. The transient's 144 MiB cumulative allocation is substantial, but is not 144 MiB of retained states. The existing dictionary stores all distinct observed states until completion; neither the call limit nor these sparse examples establishes a memory bound for heavily populated searches. These observations do not establish a need for a different cycle detector, fingerprint, or cache.
 
-## Coordinate JSON and SQLite
+### Coordinate JSON and SQLite
 
 All fixtures are the same 1,024 × 1,024 sparse/moderate/full boards above. `BoardStateCodec.Encode` returns a JSON string; decode includes reconstructing the living-cell `HashSet`. Every coordinate JSON character here is ASCII, so the UTF-8 byte counts equal string character counts; managed UTF-16 string storage is different.
 
@@ -77,9 +79,9 @@ To separate codec work practically, the temporary harness also executed the same
 
 After eight inserts per file (two warm-ups, three production inserts, three pre-encoded inserts) and a checkpoint, database file sizes were 331,776 / 74,809,344 / 299,487,232 bytes for sparse/moderate/full. These include schema/pages and **eight rows each**, with two state strings per row; they are not single-board sizes or disk-write byte counts.
 
-SQLite completed these local serial operations reasonably for the exercise. Dense coordinate JSON is a meaningful cost: standalone full-board decoding took about 431 ms and allocated 181 MiB, versus about 61 ms for fetching the stored text. It is the dominant measured stage of dense reconstruction, although exact attribution requires profiling. The dense JSON also expands to about 17.8 MiB per stored state, duplicated initially by the approved schema. This does not demonstrate an unacceptable application failure or justify changing the codec without approval. Keep JSON and SQLite unchanged; cold-disk, sustained-write, contention, crash-durability, and multi-client throughput conclusions cannot be drawn from these timings.
+SQLite completed these local serial operations reasonably for the exercise. Dense coordinate JSON is a meaningful cost: standalone full-board decoding took about 431 ms and allocated 181 MiB, versus about 61 ms for fetching the stored text. It is the dominant measured stage of dense reconstruction, although exact attribution requires profiling. The dense JSON also expands to about 17.8 MiB per stored state, duplicated initially by the approved schema. These results do not establish a need for a codec or storage rewrite. Cold-disk, sustained-write, contention, crash-durability, and multi-client throughput conclusions cannot be drawn from these timings.
 
-## HTTP observations
+### HTTP observations
 
 The harness launched the **built production API entry point** in a separate Release process, Production environment, on ephemeral loopback HTTP with a fresh SQLite file. Startup, schema initialization, request-body construction, and relevant endpoint warm-ups were excluded. The normal Kestrel body-size setting was left unchanged. There was one caller; no TLS, compression, reverse proxy, or external network.
 
@@ -94,70 +96,11 @@ Sparse upload requests were 6,292,430 bytes; current responses were 6,292,521 by
 
 After all HTTP observations, the API process reported 258.3 MiB current and 322.2 MiB peak working set through `Process.WorkingSet64`/`PeakWorkingSet64`. This is whole-process resident memory across startup, warm-ups, and all requests; it includes runtime/native memory, excludes the client process, and is not a per-request allocation or isolated peak for any board.
 
-## Operational assessment and review items
-
-| Existing setting/behavior | Assessment from this work |
-|---|---|
-| Final-state default: 10,000 actual engine calls | The small moving fixture exhausted in approximately 130 ms; the transient concluded in approximately 287 ms. Retain provisionally. Calls do not cap work per call or dictionary bytes; populated full-budget discovery remains unmeasured. The override is internal code only, with no public query budget. |
-| SQLite finite timeout | Retain positive connection-string `Default Timeout`, provider default 30 seconds. Uncontended timings do not tune lock waiting. Existing regression coverage exercises bounded contention; synchronous provider waiting can delay cancellation. The documented conservative command-wait accounting `(6 × MaxAttempts + 2) × timeout` gives 600 seconds at defaults, with polling overshoot; this is not a measured latency or a hard end-to-end deadline. |
-| Next optimistic attempts: 3 total | Retain. Serial performance measurements cannot tune retry success under concurrency. The full suite retains existing authoritative-reload and conflict tests. SQLite busy/locked still uses sanitized 500, not an unapproved 409 mapping. |
-| Kestrel body-size safeguard | Retain the existing framework/configuration setting; `Program.cs` introduces no numeric override. Approximately 6 MiB sample uploads succeeded, and the existing real-Kestrel suite validates configured limits/framing. A request-byte bound does not bound domain allocations, response size, or computation. No new dimension/cell-count ceiling is proposed from this sweep. |
-| Preview/absolute retrieval: no numeric computation cap or application request timeout | A valid moderate-board generation actually consumed approximately 758 ms and 207 MiB cumulative allocation. Code performs every requested generation, so large counts can monopolize CPU/request threads; concurrent cost and longer trajectories were not measured. Cancellation support remains essential. This supports retaining the previously documented server-controlled request-timeout proposal for developer review, rather than silently implementing it or inventing a numeric generation cap. |
-
-No automatic optimization or operational setting change was made. No measured operation failed or hit its watchdog. The exercise's representative bounded calculations appear workable; this is not certification for arbitrary board density, generation counts, or concurrent callers.
-
-The clearest demonstrated resource concern is allocation churn for populated generation/reconstruction. If the developer wants a correction, first profile one such operation; a small engine candidate is replacing iterator/LINQ neighbor counting with direct counting inside the existing engine, preserving the approved representation and rules. Its benefit has not been measured, and it would add imperative loop logic, so it requires separate approval and correctness verification. A server-controlled timeout is the smaller operational containment already proposed: it could bound cumulative cancellable computation, but may reject legitimate long calculations and cannot immediately interrupt a synchronous SQLite wait. No timeout value is selected here. These are review proposals, not prerequisites inferred for a codec/algorithm rewrite.
-
-## Final verification and handoff
-
-No production behavior changed, so no new RED/GREEN cycle or tests were manufactured for this measurement slice. Existing tests verify all five routes, persistence/reopen, exact engine-call accounting, cancellation, transport boundaries, and concurrency behavior. The temporary harness adds observations, not correctness or timing assertions to those suites.
-
-Executed from the repository root, with the documented Windows Event Log test-process override:
-
-```powershell
-$env:Logging__EventLog__LogLevel__Default = 'None'
-dotnet build GameOfLife.sln --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
-dotnet test GameOfLife.sln -c Debug --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
-dotnet build GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
-dotnet test GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
-```
-
-| Execution | Unit passed / failed / skipped | Integration passed / failed / skipped |
-|---|---|---|
-| Complete Debug | 53 / 0 / 0 | 103 / 0 / 0 |
-| First complete Release | 53 / 0 / 0 | 102 / 1 / 0 |
-| Complete Release rerun | 53 / 0 / 0 | 103 / 0 / 0 |
-
-Both final solution builds succeeded with zero errors and one NU1900 warning each. The initial pre-measurement Release build had zero warnings/errors. Building the temporary harness restored from existing packages, but NuGet's vulnerability-data fetch could not reach `https://api.nuget.org/v3/index.json`; the API's cached restore warning then appeared on subsequent no-restore builds/tests. No package changes were made, and no claim of a successful online vulnerability audit is made.
-
-The first Release run failed `KestrelResourceTests.ChunkedLimitIncludesTheFramesActuallyWritten(chunkSize: 256, allowance: 0)` during fixture teardown. The stack was `FileSystemWatcher.StopRaisingEvents` → `PhysicalFileProvider.Dispose` → host/WebApplicationFactory disposal → `KestrelFixture.DisposeAsync` line 83, throwing `NullReferenceException`. The HTTP assertions were not the reported failure. The cause was not established; this is a nonreproduced teardown failure, not proof that the suite is reliably free of intermittent failures. No production or fixture changes were made. Before the full Release rerun, this focused command passed all six cases with zero failures/skips:
-
-```powershell
-dotnet test GameOfLife.IntegrationTests -c Release --no-build --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal --filter FullyQualifiedName~ChunkedLimitIncludesTheFramesActuallyWritten
-```
-
-Measurement commands were the following temporary-only commands; the project was never added to the solution and is no longer retained:
-
-```powershell
-dotnet build .slice11-temp/Measure.csproj -c Release -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
-dotnet build .slice11-temp/Measure.csproj -c Release --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
-dotnet .slice11-temp/bin/Release/net8.0/Measure.dll compute
-dotnet .slice11-temp/bin/Release/net8.0/Measure.dll storage
-dotnet .slice11-temp/bin/Release/net8.0/Measure.dll http
-git diff --check
-```
-
-The second harness build aligned server GC after the initial exploration; tables report only that configuration. Whitespace validation passed. Final repository changes are `PERFORMANCE.md`, the README summary/link, and PLAN status/handoff. No generated database, measurement executable/project, dependency, or test change remains. No commit or push was performed.
-
-**Independent reviewer action:** Inspect the lifecycle in `GameOfLife.IntegrationTests/KestrelFixture.cs`, including ownership, shutdown/disposal order, synchronous versus asynchronous disposal paths, and file-provider lifetime across the Kestrel host, bootstrap host, and `WebApplicationFactory`. The passing reruns do not close this item: an intermittent teardown failure can affect a reviewer's machine, even though this observation does not establish a production bug. If a fixture lifecycle defect is confirmed, fix it simply within the existing fixture and tests; do not introduce new testing infrastructure. No lifecycle cause has been established or correction implemented here.
-
-Slice 11 performance verification and test execution are complete for developer review. Remaining review items are the Kestrel fixture lifecycle investigation above, provisional operational values and the timeout proposal, and the separately requested independent final review. No independent review or additional implementation was performed in this slice.
-
-## Follow-up optimization: direct neighbor counting
+## Neighbor-counting optimization
 
 After the independent review, `GenerationEngine.cs` replaced the per-candidate LINQ live-neighbor count with direct iteration over the eight neighboring offsets, skipping the center and retaining the existing bounds check. Candidate collection, data structures, public contracts, Life rules, input immutability, and cancellation checks were unchanged.
 
-This is a new paired before/after comparison, measured immediately around that change. The preceding Slice 11 results remain the historical baseline; the percentages below use the newly measured **Before** rows, not the original Slice 11 timings.
+This separate paired before/after comparison was measured immediately around that change. The preceding Slice 11 results remain the historical baseline; the percentages below use the newly measured **Before** rows, not the original Slice 11 timings.
 
 Environment: Windows 10 x64 build 19045, SDK 10.0.403, .NET 8.0.33, eight logical processors, Release builds with server GC and normal runtime tiering. The same temporary console harness referenced the real API engine before and after the change, outside the solution. Each workload used a fresh `Random(1101)`, row-major construction, and `NextDouble() < density`: moderate had 261,848 living cells (24.97%); full had 1,048,576 (100%). One unmeasured warm-up preceded three sequential single-generation samples from the same original state. Setup, pre-sample GC, checksum verification, and console output were excluded; tests did not overlap measurements. Each calculation had a 15-second cancellation watchdog; none fired. The harness was removed afterward.
 
@@ -170,6 +113,26 @@ Environment: Windows 10 x64 build 19045, SDK 10.0.403, .NET 8.0.33, eight logica
 
 Times use `Stopwatch`; allocations are median deltas from `GC.GetTotalAllocatedBytes(true)`, with MiB = 1,048,576 bytes. These are **cumulative managed allocations, not peak or retained memory**. Moderate-board median execution time improved by 16.1%. Full-board median time increased by 5.4%, with overlapping sample ranges; these local observations do not demonstrate a reliable full-board timing improvement or establish sustained throughput.
 
-Output SHA-256 checksums matched before and after for every sample (298,123 moderate output cells; four full-board output cells), and inputs remained unchanged. Existing targeted Release engine/discovery tests passed all 47 cases before and after. Following the change, complete Debug and Release suites each passed **53 unit + 103 integration tests**, with no failures or skips, using the documented Event Log override and serial/no-shared-compilation commands. No new regression tests were needed; `git diff --check` passed.
+Output SHA-256 checksums matched before and after for every sample (298,123 moderate output cells; four full-board output cells), and inputs remained unchanged. Existing targeted Release engine/discovery tests passed all 47 cases before and after. No new regression tests were needed; historical and final suite counts are distinguished below.
 
-The small optimization was retained because it removes avoidable iterator/delegate allocations with straightforward loops, reducing cumulative allocations by 60.7% and 52.4% without expanding scope or weakening correctness coverage. Retention is justified by the allocation reduction, not a claimed full-board speedup.
+## Conclusions and limitations
+
+Direct neighbor counting was retained because straightforward loops remove avoidable iterator/delegate allocations without changing candidate collection, data structures, rules, or cancellation behavior. The paired comparison reduced cumulative managed allocations by 60.7% for moderate boards and 52.4% for full boards. Moderate median execution time improved 16.1%; full-board timing did not demonstrate a reliable improvement. These allocation reductions are not measurements of peak or retained memory and are not evidence of a memory leak or its removal.
+
+Dense JSON decoding and SQLite reconstruction remain material costs. The discovery dictionary retains distinct states until completion; its 10,000-call budget does not bound work per call or retained bytes. The measured sparse/transient fixtures do not establish capacity for populated full-budget searches. No observation justifies replacing dictionary detection, coordinate JSON, or SQLite solely for this exercise.
+
+| Setting/behavior | Operational limitation |
+|---|---|
+| Final-state discovery: provisional 10,000 actual engine calls | Internal-only budget override; no public query budget. Calls bound search iterations, not state size, retained bytes, or wall-clock time. |
+| Next: provisional three total optimistic attempts | Only a zero-row conditional update authorizes reload/recalculation. Serial measurements do not tune concurrent retry success. SQLite busy/locked exceptions remain sanitized `500`, not optimistic `409`. |
+| SQLite: positive finite provider timeout, default 30 seconds | Synchronous waiting can delay cancellation. Conservative command-wait accounting `(6 x MaxAttempts + 2) x timeout` gives 600 seconds at defaults, with possible polling overshoot; this is neither measured request latency nor a hard deadline. |
+| Kestrel request-body limit | Native enforcement includes chunk framing. A request-byte bound does not bound domain allocations, response size, or computation. No additional dimension/cell-count ceiling follows from these measurements; 1,024 x 1,024 is a support baseline, not a maximum. |
+| Relative/absolute retrieval: no numeric cap or computation timeout | Large valid counts can occupy CPU/request threads while callers keep connections open. Request cancellation is supported; a server-controlled timeout is an optional production safeguard that could reject legitimate long calculations and cannot immediately interrupt synchronous SQLite waiting. |
+
+No measured operation failed or reached its cancellation watchdog. These local serial sanity checks establish no sustained-throughput, concurrent-load, arbitrary-density/count, cold-disk, crash-durability, peak-memory, or cancellation-latency guarantee. Low-density random boards that die immediately establish starting-state cost rather than long-lived sparse behavior. Original discovery, persistence, and HTTP measurements were not repeated after the engine-only optimization.
+
+**Verification context:** The baseline's successful Debug/Release runs and the optimization verification used the historical suite of **53 unit + 103 integration tests**. After removal of two redundant standalone integration tests, the final verified Debug and Release suites each passed **53 unit + 101 integration tests**, with no failures or skips. Coverage for advancement, stable discovery, concurrency, and durable reuse remains in the retained tests. Current commands and the Windows Event Log test-process override are documented in README; the temporary measurement harnesses were outside the solution and removed after use.
+
+**Historical teardown qualification:** The first baseline Release run failed `KestrelResourceTests.ChunkedLimitIncludesTheFramesActuallyWritten(chunkSize: 256, allowance: 0)` during teardown, not its HTTP assertions. A `NullReferenceException` occurred along `FileSystemWatcher.StopRaisingEvents` -> `PhysicalFileProvider.Dispose` -> host/WebApplicationFactory disposal -> `KestrelFixture.DisposeAsync`. The focused six-case group and full Release rerun passed. Subsequent cleanup removed redundant bootstrap shutdown, leaving WebApplicationFactory responsible for that host; later suites passed, but neither the cleanup nor those reruns establishes the exception's cause or proves it fixed.
+
+**Audit qualification:** NuGet vulnerability metadata was unreachable during the original temporary-harness restore, producing cached `NU1900` warnings on later baseline builds. Existing packages sufficed for execution; this is not evidence of a successful online vulnerability audit.

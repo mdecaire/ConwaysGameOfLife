@@ -55,7 +55,8 @@ SQLite design:
 
 - **FinalStateResults (Slice 8):** Unique board FK, starting/result generations, representative state, period, and actual discovery engine-call count.
 
-Assume disposable development databases. CREATE TABLE IF NOT EXISTS does not upgrade an incompatible older table; use a fresh file for disposable data. Retaining non-disposable data requires an explicit migration policy. Never infer original state from an advanced current state. No migration framework is used. InitialState serves absolute reconstruction; current state/generation support restart recovery.
+SQLite provides durable persistence across application restarts. During development, databases may be manually recreated when schema changes require it. The application does not automatically delete database files on shutdown.
+CREATE TABLE IF NOT EXISTS does not upgrade an incompatible older table; use a fresh file for disposable data. Retaining non-disposable data requires an explicit migration policy. Never infer original state from an advanced current state. No migration framework is used. InitialState serves absolute reconstruction; current state/generation support restart recovery.
 
 Use Microsoft.Data.Sqlite directly with parameterized SQL, simple reproducible schema initialization from checked-in code, separate connections per operation, WAL, foreign keys, and `synchronous=FULL`. Do not introduce Entity Framework Core, Dapper, other ORMs, or database migration frameworks without explicit approval. SQLite supports atomic multi-statement transactions; FULL synchronization supplies the intended WAL durability setting. [Microsoft transaction guidance](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/transactions), [SQLite synchronization guidance](https://www.sqlite.org/pragma.html#pragma_synchronous).
 

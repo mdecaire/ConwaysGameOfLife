@@ -1,6 +1,6 @@
 # Conway's Game of Life API
 
-C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-10 are reviewed; Slice 11 performance verification and test execution are complete for developer review. The independent final code review remains separate.
+C#/.NET 8 Minimal API for finite, non-wrapping Conway's Game of Life boards, with local SQLite persistence for uploaded boards, current progress, and discovered stable or cyclic conclusions. Requires the .NET 8 SDK; package restore requires NuGet access.
 
 Run from the repository root:
 
@@ -11,10 +11,10 @@ dotnet run --project GameOfLife.Api -- --urls http://localhost:5000
 
 SQLite defaults to `boards.db` relative to the process working directory. Startup creates the schema and enables WAL; connections use foreign keys and full synchronization. A generated database is local data and should not be committed.
 
-Slice 4 adds `InitialState`. Schema initialization does not upgrade an older `Boards` table. For a disposable older development database, select a fresh file:
+Each board retains its immutable uploaded `InitialState` alongside its current state and generation. Schema initialization creates missing tables but does not upgrade an incompatible older `Boards` table. For a disposable older development database, select a fresh file:
 
 ```powershell
-$env:ConnectionStrings__Boards = 'Data Source=boards-slice4.db'
+$env:ConnectionStrings__Boards = 'Data Source=boards-dev.db'
 dotnet run --project GameOfLife.Api -- --urls http://localhost:5000
 ```
 
@@ -46,7 +46,7 @@ Uncommitted updates roll back. Exceptions, including commit failures or lost ack
 
 Generation quantities use nonnegative 64-bit integers. `stepsAhead` is required. Missing/empty query values, malformed/fractional/overflowing quantities, negative values, invalid IDs, and overflowing current-generation-plus-offset return `400` ProblemDetails. Unknown boards return `404` ProblemDetails. Both GETs propagate request cancellation and preserve all stored values.
 
-There is no approved numeric retrieval computation cap. Tests exercise 10,001 calls on both routes. Large counts can occupy CPU and a request thread until cancellation. A configurable server request timeout is proposed for developer review; no timeout value or new generation limit has been introduced. The domain final-state search defaults provisionally to 10,000 actual engine calls, with an internal-only override. It returns Stable, Cycle, or Inconclusive with exact generation/period/call metadata, verifying living-cell equality after fingerprint lookup. This limit applies only to final-state discovery. Real Kestrel tests cover request-size boundaries and server-observed disconnect cancellation for both retrieval routes and uncached Final State. Disconnected clients are not guaranteed an HTTP error response.
+Retrieval has no numeric computation cap or server-controlled computation timeout. Tests exercise 10,001 calls on both routes. Large counts can occupy CPU and a request thread until cancellation; a server-controlled timeout is an optional production safeguard. The domain final-state search defaults provisionally to 10,000 actual engine calls, with an internal-only override. It returns Stable, Cycle, or Inconclusive with exact generation/period/call metadata, verifying living-cell equality after fingerprint lookup. This limit applies only to final-state discovery. Real Kestrel tests cover request-size boundaries and server-observed disconnect cancellation for both retrieval routes and uncached Final State. Disconnected clients are not guaranteed an HTTP error response.
 
 Request Final State with `GET http://localhost:5000/api/boards/{id}/final-state` (replace `{id}` with the uploaded ID). A successful `200` response contains the common board fields plus `startingGeneration`, `conclusionKind`, `cycleLength`, and `iterationsUsed`. `Stable` means the verified configuration repeats every generation (`cycleLength: 1`); `Cycle` means the returned configuration belongs to a verified repeating orbit with a longer period. `generation` labels that representative on the original discovery trajectory. For example, a block discovered from generation 5 returns generation 6, startingGeneration 5, conclusionKind `Stable`, cycleLength 1, and iterationsUsed 1; a blinker from generation 5 returns its repeated phase at generation 7 with kind `Cycle`, period 2, and two iterations.
 
@@ -68,6 +68,8 @@ dotnet test GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCo
 
 Tests use temporary file-backed SQLite with pooling disabled and clean up their own files. Coverage includes durable upload/reopen, independent changing glider phases, current versus initial origin, zero-call reads, exact engine call counts, validation/overflow, snapshot consistency, cancellation, unchanged persistence, and live Location resolution after restart.
 
-Release measurements on a Windows 10 / i7-4790K machine with .NET 8.0.33 and server GC gave median one-generation times of 11 ms for a sparse 1,024 × 1,024 board, 758 ms at approximately 25% density, and 1,029 ms when full. A sparse 2,048 × 2,048 board took 13 ms; 1,024 × 1,024 is not a size ceiling. Populated calculations allocated approximately 207–259 MiB per call cumulatively. Full-board JSON decoding and SQLite reconstruction were also material costs; all settings remain unchanged pending review.
+The generation engine uses direct neighbor counting to avoid per-candidate LINQ iterator/delegate allocations. In paired Release measurements on Windows 10 with .NET 8.0.33 and server GC, 1,024 × 1,024 boards at approximately 25% density and full population allocated 81.3 and 123.4 MiB per generation: reductions of 60.7% and 52.4%, respectively. These are cumulative managed allocations, not peak or retained memory. Median times were 737 ms and 1,147 ms; the moderate-board median improved 16.1%, while full-board timing did not demonstrate a reliable improvement. Dense JSON decoding and SQLite reconstruction remain material costs. The 1,024 × 1,024 support baseline is not a size ceiling.
 
-Final Debug and Release runs each passed 53 unit and 103 integration tests with no skips. An earlier Release run hit one nonreproduced Windows file-watcher exception during Kestrel fixture teardown; its six-case group and the complete Release rerun passed. See [Slice 11 performance verification](PERFORMANCE.md) for all samples, memory definitions, persistence/HTTP observations, exact commands, the NuGet audit network limitation, and operational review items. These local serial observations establish no concurrent-load or arbitrary-generation-count guarantee.
+The latest Debug and Release runs each passed 53 unit and 101 integration tests, with no failures or skips. An earlier Release run encountered an intermittent Windows file-watcher exception during Kestrel fixture teardown. Subsequent runs passed; removing redundant bootstrap shutdown is not proof that the underlying issue is fixed.
+
+See [performance measurements and historical comparisons](PERFORMANCE.md) for the original Slice 11 baseline, the separate before/after optimization samples, methodology, persistence/HTTP observations, and limitations. These local serial measurements establish no concurrent-load or arbitrary-generation-count guarantee.
