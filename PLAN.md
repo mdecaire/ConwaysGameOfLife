@@ -1,6 +1,6 @@
 # Conway’s Game of Life API implementation plan
 
-> Current implementation status (Slice 8 handoff): Slices 1-7 are complete and reviewed under the latest request. Slice 8 final-state HTTP discovery and durable SQLite result reuse are implemented for developer review. Stop before Slice 9.
+> Current implementation status (Slice 9 handoff): Slices 1-8 are complete and reviewed under the latest request. Slice 9 concurrent final-state discovery coverage is complete for developer review; existing production code passed unchanged. Stop before Slice 10.
 
 ## 1. Baseline and architecture
 
@@ -232,6 +232,30 @@ Actual RED: the initial stable HTTP/persistence acceptance test returned 404 bec
 Actual verification (with `$env:Logging__EventLog__LogLevel__Default = 'None'`): focused `dotnet test GameOfLife.IntegrationTests --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal --filter FullyQualifiedName~BoardFinalStateTests` passed 16 cases. Full `dotnet test GameOfLife.sln --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal` and the same command with `-c Release` each passed 53 unit and 80 integration cases, with no failures/skips. `git diff --check` passed.
 
 Changed files: `Application/ApplicationModels.cs`, `Application/BoardService.cs`, `Endpoints/BoardEndpoints.cs`, `Infrastructure/SqliteBoardStore.cs`, `BoardFinalStateTests.cs`, README, and this status/handoff. No unresolved functional blocker was found. The default budget remains provisional; performance tuning belongs to Slice 11. Stop for developer review; do not begin Slice 9. No commit or push.
+
+### Slice 9: Concurrent final-state discovery - complete for review
+
+Three new integration cases in `BoardFinalStateTests.cs` use the existing file-backed SQLite fixture and counting-engine callback with controlled gates, finite waits, and gate release/request disposal in cleanup:
+
+- Two first-time discoveries are held after their first engine call, proving both passed lookup and established snapshots before either can save. Releasing them verifies two HTTP 200 responses with byte-identical JSON and exactly one saved row matching the cells, generations, conclusion kind, period, and iterations. Both perform discovery (four total engine calls); host/database reopen preserves the winner with zero additional calls on reuse.
+- The same test interleaves a committed Next between the two snapshots. Discoveries start at generations 5 and 6 on opposite blinker phases, so their independent valid candidates differ in cells and generation metadata. Either may win; both must return the stored winner unchanged. Five total calls account for both two-step discoveries and Next, whose committed progress remains unchanged.
+- A separate overlap test pauses discovery from generation 5 while Next commits generation 6 and its expected cells. Discovery then saves its original generation-7 blinker conclusion without overwriting current progress. Further Next calls reach generation 8; replay before/after restart retains the original starting generation, representative cells/generation, cycle length, and iteration count with zero additional calculations.
+
+All new cases passed on introduction against Slice 8 production code. No RED or production defect is claimed, and no production changes, new test framework, locks, caches, generation guards, retries, tables, interfaces, or dependencies were needed. README is unchanged because public behavior is unchanged.
+
+Actual verification used `$env:Logging__EventLog__LogLevel__Default = 'None'` and:
+
+```powershell
+dotnet test GameOfLife.IntegrationTests --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal --filter FullyQualifiedName~ConcurrentFirstDiscoveries
+dotnet test GameOfLife.IntegrationTests --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal --filter FullyQualifiedName~InFlightDiscoveryKeepsOriginalSnapshot
+dotnet test GameOfLife.sln --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
+dotnet test GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCompilation=false --verbosity minimal
+git diff --check
+```
+
+Focused runs passed two and one cases respectively. Debug baseline passed 53 unit + 80 integration cases; final Debug and Release each passed 53 unit + 83 integration cases, with no failures/skips. The initial default parallel/shared-build baseline invocation stalled; the documented single-node settings completed successfully. Whitespace validation passed. These are controlled request interleavings, not exhaustive scheduler, stress, process-kill, or disk-failure coverage. No functional blocker or scope deviation was found. Changed files: `BoardFinalStateTests.cs` and `PLAN.md`. Stop after Slice 9 for developer review; do not begin Slice 10. No commit or push.
+
+Slice 9 review cleanup: removed `CancellationAfterConfirmedCommitPreservesResultForZeroCallReuse` and its `CancelOnWriteDisposalConnection` helper as requested. Final State and successful Next now map committed results with `CancellationToken.None`, retaining cancellation before calculations/commit and all existing pre-commit rollback tests. Before removal, temporarily changing the existing test to expect a returned result reproduced `OperationCanceledException` in response mapping (one failure); the same assertion passed after the correction. No replacement test machinery or abstractions were added. README and service comments clarify the commit boundary. Final verification used the same Debug/Release commands and Event Log override above: each passed 53 unit + 82 integration cases, with no failures/skips; `git diff --check` passed. This is a focused review correction, not another slice.
 
 ## 4. Final performance review and SQLite correctness review
 

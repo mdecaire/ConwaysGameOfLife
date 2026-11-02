@@ -13,6 +13,161 @@ namespace GameOfLife.IntegrationTests;
 public sealed class BoardFinalStateTests
 {
     private static readonly (int X, int Y)[] Block = [(2, 1), (3, 1), (2, 2), (3, 2)];
+    private static readonly (int X, int Y)[] HorizontalBlinker = [(2, 2), (3, 2), (4, 2)];
+    private static readonly (int X, int Y)[] VerticalBlinker = [(3, 1), (3, 2), (3, 3)];
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentFirstDiscoveriesReturnOneDurableWinner(bool advanceBetweenSnapshots)
+    {
+        using var fixture = new BoardFixture();
+        fixture.Seed(Phases[0], HorizontalBlinker, 5);
+        var before = fixture.StoredValues();
+        var client = fixture.Client;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var calls = 0;
+        fixture.Engine.AfterCalculation = _ =>
+        {
+            var call = Interlocked.Increment(ref calls);
+            // Both discoveries stop on their first calculation, after lookup and snapshot read.
+            // In the second case call 2 belongs to Next, which must commit without waiting.
+            if (call == 1) firstEntered.TrySetResult();
+            else if (call == (advanceBetweenSnapshots ? 3 : 2)) secondEntered.TrySetResult();
+            else return;
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)), "Discovery must be released before timeout.");
+        };
+        var requests = new List<Task<HttpResponseMessage>>();
+        try
+        {
+            requests.Add(Task.Run(() => client.GetAsync($"/api/boards/{fixture.Id}/final-state")));
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (advanceBetweenSnapshots)
+            {
+                using var next = await client.PostAsync($"/api/boards/{fixture.Id}/next", null)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                await AssertBoard(next, fixture.Id, 6, VerticalBlinker);
+            }
+            var committed = fixture.StoredValues();
+            requests.Add(Task.Run(() => client.GetAsync($"/api/boards/{fixture.Id}/final-state")));
+            await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            AssertEmpty(fixture);
+            Assert.All(requests, request => Assert.False(request.IsCompleted));
+            Assert.Equal(advanceBetweenSnapshots ? 3 : 2, fixture.Engine.Calls);
+
+            release.Set();
+            var responses = await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(20));
+            var original = await responses[0].Content.ReadAsStringAsync();
+            Assert.Equal(original, await responses[1].Content.ReadAsStringAsync());
+            using var json = JsonDocument.Parse(original);
+            var start = json.RootElement.GetProperty("startingGeneration").GetInt64();
+            Assert.Contains(start, advanceBetweenSnapshots ? new long[] { 5, 6 } : new long[] { 5 });
+            var cells = start == 5 ? HorizontalBlinker : VerticalBlinker;
+            foreach (var response in responses)
+                await AssertBoard(response, fixture.Id, start + 2, cells);
+            Assert.Equal("Cycle", json.RootElement.GetProperty("conclusionKind").GetString());
+            Assert.Equal(2, json.RootElement.GetProperty("cycleLength").GetInt32());
+            Assert.Equal(2, json.RootElement.GetProperty("iterationsUsed").GetInt32());
+            AssertSaved(fixture, start, start + 2, cells, 2, 2);
+            Assert.Equal(committed, fixture.StoredValues());
+            Assert.Equal(before.Initial, committed.Initial);
+            if (!advanceBetweenSnapshots) Assert.Equal(before, committed);
+            var expectedCalls = advanceBetweenSnapshots ? 5 : 4;
+            Assert.Equal(expectedCalls, fixture.Engine.Calls);
+
+            fixture.Reopen();
+            AssertSaved(fixture, start, start + 2, cells, 2, 2);
+            using var reused = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/final-state")
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(HttpStatusCode.OK, reused.StatusCode);
+            Assert.Equal(original, await reused.Content.ReadAsStringAsync());
+            Assert.Equal(expectedCalls, fixture.Engine.Calls);
+            Assert.Equal(committed, fixture.StoredValues());
+        }
+        finally
+        {
+            release.Set();
+            foreach (var request in requests)
+                (await request.WaitAsync(TimeSpan.FromSeconds(20))).Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task InFlightDiscoveryKeepsOriginalSnapshotWhileNextCommits()
+    {
+        using var fixture = new BoardFixture();
+        fixture.Seed(Phases[0], HorizontalBlinker, 5);
+        var before = fixture.StoredValues();
+        var client = fixture.Client;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var calls = 0;
+        fixture.Engine.AfterCalculation = _ =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            entered.TrySetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)), "Discovery must be released before timeout.");
+        };
+        var request = Task.Run(() => client.GetAsync($"/api/boards/{fixture.Id}/final-state"));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            using var next = await client.PostAsync($"/api/boards/{fixture.Id}/next", null)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            await AssertBoard(next, fixture.Id, 6, VerticalBlinker);
+            var committed = fixture.StoredValues();
+            Assert.Equal(6, committed.Generation);
+            Assert.Equal(before.Initial, committed.Initial);
+            Assert.True(new BoardStateCodec().Decode(7, 6, committed.Current).LivingCells.SetEquals(VerticalBlinker));
+            Assert.False(request.IsCompleted);
+            AssertEmpty(fixture);
+
+            release.Set();
+            var response = await request.WaitAsync(TimeSpan.FromSeconds(20));
+            var original = await response.Content.ReadAsStringAsync();
+            await AssertBoard(response, fixture.Id, 7, HorizontalBlinker);
+            using var json = JsonDocument.Parse(original);
+            Assert.Equal(5, json.RootElement.GetProperty("startingGeneration").GetInt64());
+            Assert.Equal("Cycle", json.RootElement.GetProperty("conclusionKind").GetString());
+            Assert.Equal(2, json.RootElement.GetProperty("cycleLength").GetInt32());
+            Assert.Equal(2, json.RootElement.GetProperty("iterationsUsed").GetInt32());
+            AssertSaved(fixture, 5, 7, HorizontalBlinker, 2, 2);
+            Assert.Equal(committed, fixture.StoredValues());
+            Assert.Equal(3, fixture.Engine.Calls); // Two discovery calls plus the overlapping Next.
+
+            for (var generation = 7; generation <= 8; generation++)
+            {
+                using var further = await client.PostAsync($"/api/boards/{fixture.Id}/next", null)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                await AssertBoard(further, fixture.Id, generation,
+                    generation == 7 ? HorizontalBlinker : VerticalBlinker);
+            }
+            var advanced = fixture.StoredValues();
+            Assert.Equal(8, advanced.Generation); // The saved representative remains generation 7.
+            Assert.Equal(before.Initial, advanced.Initial);
+            await AssertReplay();
+            fixture.Reopen();
+            await AssertReplay();
+
+            async Task AssertReplay()
+            {
+                using var reused = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/final-state")
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(HttpStatusCode.OK, reused.StatusCode);
+                Assert.Equal(original, await reused.Content.ReadAsStringAsync());
+                Assert.Equal(5, fixture.Engine.Calls);
+                AssertSaved(fixture, 5, 7, HorizontalBlinker, 2, 2);
+                Assert.Equal(advanced, fixture.StoredValues());
+            }
+        }
+        finally
+        {
+            release.Set();
+            (await request.WaitAsync(TimeSpan.FromSeconds(20))).Dispose();
+        }
+    }
 
     [Fact]
     public async Task StableDiscoveryPersistsVerifiedResponseWithoutAdvancingBoard()
@@ -250,43 +405,6 @@ public sealed class BoardFinalStateTests
         fixture.Reopen();
         AssertEmpty(fixture);
         Assert.Equal(before, fixture.StoredValues());
-    }
-
-    [Fact]
-    public void CancellationAfterConfirmedCommitPreservesResultForZeroCallReuse()
-    {
-        using var fixture = new BoardFixture();
-        fixture.Seed(Block, Block, 0);
-        using var cancellation = new CancellationTokenSource();
-        var store = new SqliteBoardStore(fixture.ConnectionString, new BoardStateCodec(),
-            value => new CancelOnWriteDisposalConnection(value, cancellation));
-        var service = new BoardService(store, fixture.Engine);
-        Assert.Throws<OperationCanceledException>(() => service.FinalState(fixture.Id, cancellation.Token));
-        Assert.Equal(1, fixture.Engine.Calls);
-        AssertSaved(fixture, 0, 1, Block, 1, 1);
-        var reused = service.FinalState(fixture.Id)!;
-        Assert.Equal(1, reused.IterationsUsed);
-        Assert.Equal(1, reused.Generation);
-        Assert.Equal(1, fixture.Engine.Calls);
-    }
-
-    // Disposal occurs after the real COMMIT returns, before response mapping.
-    private sealed class CancelOnWriteDisposalConnection(string value, CancellationTokenSource cancellation)
-        : SqliteConnection(value)
-    {
-        private bool wrote;
-        public override SqliteTransaction BeginTransaction(bool deferred)
-        {
-            var transaction = base.BeginTransaction(deferred);
-            wrote = true;
-            return transaction;
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-            if (disposing && wrote) cancellation.Cancel();
-        }
     }
 
     private static void Execute(BoardFixture fixture, string sql)

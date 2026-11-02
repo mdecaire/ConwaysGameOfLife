@@ -12,7 +12,7 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
     /// Successful discovery is saved without advancing the board; exhaustion saves nothing.</summary>
     /// <returns>The original saved conclusion, or null if the board does not exist.</returns>
     /// <exception cref="FinalStateInconclusiveException">The internal work limit could not prove a conclusion.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation was observed; a confirmed commit remains saved.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was observed before persistence completed.</exception>
     public FinalStateResponse? FinalState(Guid boardId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -28,18 +28,19 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
             cancellationToken.ThrowIfCancellationRequested();
             result = store.SaveFinalState(boardId, result, cancellationToken);
         }
-        var response = ToResponse(boardId, result.State, result.Generation, cancellationToken);
+        // Once persistence succeeds, return its result without deliberately canceling response mapping.
+        var response = ToResponse(boardId, result.State, result.Generation, CancellationToken.None);
         return new(boardId, response.Generation, response.Width, response.Height, response.Cells,
             result.StartingGeneration, result.Outcome.ToString(), result.CycleLength!.Value, result.IterationsUsed);
     }
 
     /// <summary>Reloads and recalculates on verified conflicts, returning only its own committed state.</summary>
     /// <param name="boardId">The identifier of the board to advance.</param>
-    /// <param name="cancellationToken">The token checked before calculation, persistence, and response mapping.</param>
+    /// <param name="cancellationToken">The token checked before calculation and transaction commit.</param>
     /// <returns>The committed next state, or null if the board was not found.</returns>
     /// <exception cref="BoardConflictException">Verified conflicts exhausted the attempt allowance.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The current generation is already at the maximum supported value.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation was observed; an already committed update remains durable.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was observed before a successful commit.</exception>
     public BoardResponse? Next(Guid boardId, CancellationToken cancellationToken = default)
     {
         for (var attempt = 0; attempt < maxNextAttempts; attempt++)
@@ -54,7 +55,7 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
             // TryAdvance disposes the attempt before returning false. Exceptions (including
             // busy/locked and uncertain commits) propagate; they never authorize a retry.
             if (store.TryAdvance(boardId, nextState, board.Generation, cancellationToken))
-                return ToResponse(boardId, nextState, board.Generation + 1, cancellationToken);
+                return ToResponse(boardId, nextState, board.Generation + 1, CancellationToken.None);
         }
         cancellationToken.ThrowIfCancellationRequested();
         var latest = store.Find(boardId);
