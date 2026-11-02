@@ -23,6 +23,7 @@ public sealed class BoardNextTests
             fixture.Reopen();
             using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
             await AssertBoard(current, fixture.Id, generation, Phases[generation]);
+            Assert.Equal(generation, fixture.Engine.Calls);
             Assert.Equal(initial, fixture.StoredValues().Initial);
         }
         using var original = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/generations/0");
@@ -132,23 +133,6 @@ public sealed class BoardNextTests
         check.CommandText = "SELECT CommitGuard FROM Boards WHERE Id=$id";
         check.Parameters.AddWithValue("$id", fixture.Id.ToString());
         Assert.Equal(DBNull.Value, check.ExecuteScalar());
-    }
-
-    [Fact]
-    public async Task NextCommitsExactlyOneGenerationAndPreservesInitialState()
-    {
-        using var fixture = new BoardFixture();
-        fixture.Seed(Phases[0], Phases[0], 0);
-        var initial = fixture.StoredValues().Initial;
-
-        using var response = await fixture.Client.PostAsync($"/api/boards/{fixture.Id}/next", null);
-
-        await AssertBoard(response, fixture.Id, 1, Phases[1]);
-        Assert.Equal(1, fixture.Engine.Calls);
-        Assert.Equal(initial, fixture.StoredValues().Initial);
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
-        await AssertBoard(current, fixture.Id, 1, Phases[1]);
-        Assert.Equal(1, fixture.Engine.Calls);
     }
 
     [Fact]

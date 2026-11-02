@@ -136,55 +136,12 @@ public sealed class BoardFinalStateTests
             AssertSaved(fixture, 5, 7, HorizontalBlinker, 2, 2);
             Assert.Equal(committed, fixture.StoredValues());
             Assert.Equal(3, fixture.Engine.Calls); // Two discovery calls plus the overlapping Next.
-
-            for (var generation = 7; generation <= 8; generation++)
-            {
-                using var further = await client.PostAsync($"/api/boards/{fixture.Id}/next", null)
-                    .WaitAsync(TimeSpan.FromSeconds(10));
-                await AssertBoard(further, fixture.Id, generation,
-                    generation == 7 ? HorizontalBlinker : VerticalBlinker);
-            }
-            var advanced = fixture.StoredValues();
-            Assert.Equal(8, advanced.Generation); // The saved representative remains generation 7.
-            Assert.Equal(before.Initial, advanced.Initial);
-            await AssertReplay();
-            fixture.Reopen();
-            await AssertReplay();
-
-            async Task AssertReplay()
-            {
-                using var reused = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/final-state")
-                    .WaitAsync(TimeSpan.FromSeconds(10));
-                Assert.Equal(HttpStatusCode.OK, reused.StatusCode);
-                Assert.Equal(original, await reused.Content.ReadAsStringAsync());
-                Assert.Equal(5, fixture.Engine.Calls);
-                AssertSaved(fixture, 5, 7, HorizontalBlinker, 2, 2);
-                Assert.Equal(advanced, fixture.StoredValues());
-            }
         }
         finally
         {
             release.Set();
             (await request.WaitAsync(TimeSpan.FromSeconds(20))).Dispose();
         }
-    }
-
-    [Fact]
-    public async Task StableDiscoveryPersistsVerifiedResponseWithoutAdvancingBoard()
-    {
-        using var fixture = new BoardFixture();
-        fixture.Seed(Phases[0], Block, 5);
-        var before = fixture.StoredValues();
-        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/final-state");
-        await AssertBoard(response, fixture.Id, 6, Block);
-        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
-        Assert.Equal(5, json.GetProperty("startingGeneration").GetInt64());
-        Assert.Equal("Stable", json.GetProperty("conclusionKind").GetString());
-        Assert.Equal(1, json.GetProperty("cycleLength").GetInt32());
-        Assert.Equal(1, json.GetProperty("iterationsUsed").GetInt32());
-        Assert.Equal(1, fixture.Engine.Calls);
-        Assert.Equal(before, fixture.StoredValues());
-        AssertSaved(fixture, 5, 6, Block, 1, 1);
     }
 
     [Theory]

@@ -85,7 +85,28 @@ public sealed class GenerationEngine : IGenerationEngine
     /// <param name="cell">The coordinate whose neighbors are counted.</param>
     /// <returns>The number of living neighbors within the board.</returns>
     private static int CountLivingNeighbors(BoardState state, (int X, int Y) cell)
-        => GetNeighborPositions(state, cell).Count(state.LivingCells.Contains);
+    {
+        var count = 0;
+        for (var yOffset = -1; yOffset <= 1; yOffset++)
+        {
+            for (var xOffset = -1; xOffset <= 1; xOffset++)
+            {
+                if (xOffset == 0 && yOffset == 0)
+                {
+                    continue;
+                }
+
+                var x = cell.X + xOffset;
+                var y = cell.Y + yOffset;
+                if (IsWithinBoard(state, x, y) && state.LivingCells.Contains((x, y)))
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
 
     /// <summary>
     /// Enumerates neighboring coordinates within the board, excluding the cell itself.

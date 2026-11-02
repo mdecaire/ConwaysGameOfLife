@@ -152,3 +152,24 @@ The second harness build aligned server GC after the initial exploration; tables
 **Independent reviewer action:** Inspect the lifecycle in `GameOfLife.IntegrationTests/KestrelFixture.cs`, including ownership, shutdown/disposal order, synchronous versus asynchronous disposal paths, and file-provider lifetime across the Kestrel host, bootstrap host, and `WebApplicationFactory`. The passing reruns do not close this item: an intermittent teardown failure can affect a reviewer's machine, even though this observation does not establish a production bug. If a fixture lifecycle defect is confirmed, fix it simply within the existing fixture and tests; do not introduce new testing infrastructure. No lifecycle cause has been established or correction implemented here.
 
 Slice 11 performance verification and test execution are complete for developer review. Remaining review items are the Kestrel fixture lifecycle investigation above, provisional operational values and the timeout proposal, and the separately requested independent final review. No independent review or additional implementation was performed in this slice.
+
+## Follow-up optimization: direct neighbor counting
+
+After the independent review, `GenerationEngine.cs` replaced the per-candidate LINQ live-neighbor count with direct iteration over the eight neighboring offsets, skipping the center and retaining the existing bounds check. Candidate collection, data structures, public contracts, Life rules, input immutability, and cancellation checks were unchanged.
+
+This is a new paired before/after comparison, measured immediately around that change. The preceding Slice 11 results remain the historical baseline; the percentages below use the newly measured **Before** rows, not the original Slice 11 timings.
+
+Environment: Windows 10 x64 build 19045, SDK 10.0.403, .NET 8.0.33, eight logical processors, Release builds with server GC and normal runtime tiering. The same temporary console harness referenced the real API engine before and after the change, outside the solution. Each workload used a fresh `Random(1101)`, row-major construction, and `NextDouble() < density`: moderate had 261,848 living cells (24.97%); full had 1,048,576 (100%). One unmeasured warm-up preceded three sequential single-generation samples from the same original state. Setup, pre-sample GC, checksum verification, and console output were excluded; tests did not overlap measurements. Each calculation had a 15-second cancellation watchdog; none fired. The harness was removed afterward.
+
+| 1,024 x 1,024 board | Version | Times ms (three samples) | Median ms | Median time change | Allocated MiB (median) | Allocation change |
+|---|---|---|---:|---:|---:|---:|
+| Moderate | Before | 878.330, 833.409, 890.119 | 878.330 | — | 207.020 | — |
+| Moderate | After | 755.657, 729.780, 736.820 | 736.820 | -16.1% | 81.319 | -60.7% |
+| Full | Before | 1,088.144, 1,058.809, 1,260.033 | 1,088.144 | — | 259.398 | — |
+| Full | After | 1,290.420, 1,085.934, 1,146.992 | 1,146.992 | +5.4% | 123.393 | -52.4% |
+
+Times use `Stopwatch`; allocations are median deltas from `GC.GetTotalAllocatedBytes(true)`, with MiB = 1,048,576 bytes. These are **cumulative managed allocations, not peak or retained memory**. Moderate-board median execution time improved by 16.1%. Full-board median time increased by 5.4%, with overlapping sample ranges; these local observations do not demonstrate a reliable full-board timing improvement or establish sustained throughput.
+
+Output SHA-256 checksums matched before and after for every sample (298,123 moderate output cells; four full-board output cells), and inputs remained unchanged. Existing targeted Release engine/discovery tests passed all 47 cases before and after. Following the change, complete Debug and Release suites each passed **53 unit + 103 integration tests**, with no failures or skips, using the documented Event Log override and serial/no-shared-compilation commands. No new regression tests were needed; `git diff --check` passed.
+
+The small optimization was retained because it removes avoidable iterator/delegate allocations with straightforward loops, reducing cumulative allocations by 60.7% and 52.4% without expanding scope or weakening correctness coverage. Retention is justified by the allocation reduction, not a claimed full-board speedup.

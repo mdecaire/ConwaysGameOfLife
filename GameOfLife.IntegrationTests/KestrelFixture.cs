@@ -20,7 +20,6 @@ internal sealed class KestrelFixture(long limit = 256, IGenerationEngine? engine
 {
     private readonly string path = Path.Combine(Path.GetTempPath(), $"life-kestrel-{Guid.NewGuid():N}.db");
     private IHost? kestrel;
-    private IHost? bootstrap;
     public long BytesRead;
     public TaskCompletionSource RequestCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public string ConnectionString => new SqliteConnectionStringBuilder
@@ -42,7 +41,6 @@ internal sealed class KestrelFixture(long limit = 256, IGenerationEngine? engine
     protected override IHost CreateHost(IHostBuilder builder)
     {
         var testHost = builder.Build();
-        bootstrap = testHost;
         builder.ConfigureWebHost(web => web.UseSockets().UseKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = limit;
@@ -79,7 +77,6 @@ internal sealed class KestrelFixture(long limit = 256, IGenerationEngine? engine
             kestrel.Dispose();
             kestrel = null;
         }
-        if (bootstrap is not null) await bootstrap.StopAsync();
         await base.DisposeAsync();
         // Windows can briefly retain a file handle after both hosts have stopped.
         for (var attempt = 0; ; attempt++)
