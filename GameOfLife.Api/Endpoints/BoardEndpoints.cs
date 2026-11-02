@@ -6,6 +6,13 @@ public static class BoardEndpoints
 {
     /// <summary>Maps durable upload, stateful advancement, and read-only generation endpoints.</summary>
     /// <param name="app">The application on which to register the endpoint.</param>
+    /// <remarks>
+    /// <para><c>POST /api/boards</c>: Uploads a board at generation 0.</para>
+    /// <para><c>POST /api/boards/{id}/next</c>: Advances and saves one generation.</para>
+    /// <para><c>GET /api/boards/{id}/states-ahead?stepsAhead=N</c>: Gets N generations ahead of the current generation without advancing it.</para>
+    /// <para><c>GET /api/boards/{id}/generations/{generationNumber}</c>: Gets an absolute generation counted from the initial board at generation 0.</para>
+    /// <para><c>GET /api/boards/{id}/final-state</c>: Finds and saves a stable or cyclic conclusion, or reuses the saved result.</para>
+    /// </remarks>
     public static void MapBoardEndpoints(this WebApplication app)
     {
         app.MapGet("/api/boards/{id}/final-state", (
@@ -32,9 +39,9 @@ public static class BoardEndpoints
             }
         });
 
-        app.MapGet("/api/boards/{id}/preview", (
+        app.MapGet("/api/boards/{id}/states-ahead", (
             Guid id, long stepsAhead, BoardService service, CancellationToken cancellationToken) =>
-            ExecuteBoard(() => service.Preview(id, stepsAhead, cancellationToken)));
+            ExecuteBoard(() => service.GetNStatesAhead(id, stepsAhead, cancellationToken)));
 
         app.MapGet("/api/boards/{id}/generations/{generationNumber}", (
             Guid id, long generationNumber, BoardService service, CancellationToken cancellationToken) =>
@@ -58,7 +65,7 @@ public static class BoardEndpoints
 
             var cells = request.Cells!;
             var (boardId, state) = service.Upload(cells, cancellationToken);
-            return Results.Created($"/api/boards/{boardId}/preview?stepsAhead=0",
+            return Results.Created($"/api/boards/{boardId}/states-ahead?stepsAhead=0",
                 new BoardResponse(boardId, 0, state.Width, state.Height, cells));
         });
     }

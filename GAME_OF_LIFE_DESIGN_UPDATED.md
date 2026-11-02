@@ -117,7 +117,7 @@ The labels below reflect decisions made together. “Approved provisionally” m
 
 - `stepsAhead` means the number of generations **ahead of the committed current generation**, not an absolute generation index.
 - `stepsAhead=0` returns current cells and absolute generation with no write and no engine calls. Positive values use the existing engine from one committed in-memory snapshot. Reject currentGeneration + stepsAhead overflow before engine work; zero remains valid at the maximum current generation.
-- E.g., when current generation is 5: `preview?stepsAhead=0` returns 5; `preview?stepsAhead=3` returns 8.
+- E.g., when current generation is 5: `states-ahead?stepsAhead=0` returns 5; `states-ahead?stepsAhead=3` returns 8.
 
 **Documented assumption:** The specification does not explicitly identify N's reference point. Relative future preview is supported by the phrase “N States Ahead.” The proposed absolute-generation route separately addresses reconstruction from upload (Decision 10).
 
@@ -160,7 +160,7 @@ The labels below reflect decisions made together. “Approved provisionally” m
 ### Decision 10: Absolute-generation retrieval from immutable initial state
 **Status: Proposed Slice 4 revision for documentation review; replaces prior deferral only after approval**
 
-- Add `GET /api/boards/{id}/generations/{generationNumber}` alongside `GET /api/boards/{id}/preview?stepsAhead=N`.
+- Add `GET /api/boards/{id}/generations/{generationNumber}` alongside `GET /api/boards/{id}/states-ahead?stepsAhead=N`.
 - `generationNumber` is a nonnegative absolute index from upload. Initially always calculate from InitialState, even when current progress is ahead of, equal to, or behind the target. Return the exact cells with response `generation` equal to generationNumber.
 - generationNumber=0 returns original uploaded cells with zero engine calls, including after current cells change and SQLite reopens. Both GETs return 404 for unknown boards and never mutate initial/current state or generation, persist derived results, or calculate/store/invalidate final-state results.
 - With current generation 5, preview offsets 0 and 3 return generations 5 and 8; absolute targets 0, 3, and 8 reconstruct those generations from upload.
@@ -275,7 +275,7 @@ These retry and concurrency mechanics apply in later slices. Slice 3 implements 
 | --- | --- | --- |
 | `POST` | `/api/boards` | Slice 3: persist uploaded grid as current state at generation 0; return `201` and a unique board ID with common state data; no Location requirement until Slice 4; do not compute final state |
 | `POST` | `/api/boards/{id}/next` | Advance once and commit the new current state |
-| `GET` | `/api/boards/{id}/preview?stepsAhead=3` | Return three steps ahead of one committed current snapshot, without writes or final-state computation |
+| `GET` | `/api/boards/{id}/states-ahead?stepsAhead=3` | Return three steps ahead of one committed current snapshot, without writes or final-state computation |
 | `GET` | `/api/boards/{id}/generations/{generationNumber}` | Proposed: reconstruct absolute generation from InitialState, without writes or final-state computation |
 | `GET` | `/api/boards/{id}/final-state` | **Look up a stored successful conclusion first**; compute/persist it only on a miss; do not advance the board |
 
@@ -307,7 +307,7 @@ These retry and concurrency mechanics apply in later slices. Slice 3 implements 
 }
 ```
 
-- Slice 3 upload returns `201 Created` with the generated board ID, correct dimensions, generation 0, and cells using the common board-state response. No `Location` header is required in Slice 3. In Slice 4, when preview becomes available, add `Location: /api/boards/{id}/preview?stepsAhead=0` to upload responses and verify that it resolves. This URI represents the **current** board and does not guarantee immutable access to generation 0 later; the absolute-generation URI denotes an immutable logical generation and does not replace the live-current Location resource.
+- Slice 3 upload returns `201 Created` with the generated board ID, correct dimensions, generation 0, and cells using the common board-state response. No `Location` header is required in Slice 3. In Slice 4, when preview becomes available, add `Location: /api/boards/{id}/states-ahead?stepsAhead=0` to upload responses and verify that it resolves. This URI represents the **current** board and does not guarantee immutable access to generation 0 later; the absolute-generation URI denotes an immutable logical generation and does not replace the live-current Location resource.
 - Next, relative preview, and absolute retrieval use the common state DTO with absolute generation numbers. Final State retains the existing fields `generation`, `startingGeneration`, `conclusionKind`, `cycleLength`, and `iterationsUsed` alongside the board configuration. Return the verified stable configuration or any verified member of the repeating cycle, with accurate absolute generation, period, and **actual engine calls used when the stored result was discovered**. No canonical or first-repeated representative is required. Preserve saved responses unchanged and do not imply that the cached representative is always later than today's current generation.
 - Validate nonempty rectangular boolean grids; reject `null`, jagged and malformed JSON and invalid IDs. Preserve existing request-size safeguards; additional dimension/cell-count caps remain deferred under Decision 3. **1,024 x 1,024 remains a testing baseline, not a final ceiling**.
 - **Resource-protection verification:** Configure Kestrel's request-body limit before body reading/JSON binding, using existing ASP.NET Core facilities. For a known oversized `Content-Length`, reject before deserializing the grid; retain server enforcement for chunked/unknown-length bodies, stopping when the limit is crossed without buffering the full upload. Some bounded reading/parsing is unavoidable for unknown-length bodies; do not promise zero allocation. Verify these paths with actual Kestrel, not only TestServer. Numeric payload, dimension, and cell-count limits remain provisional/configurable pending developer review informed by the lightweight performance sanity check; small test overrides are not production defaults.
@@ -318,7 +318,7 @@ These retry and concurrency mechanics apply in later slices. Slice 3 implements 
 
 | HTTP status | Chosen convention |
 | --- | --- |
-| `200 OK` | Successful retrieval/preview/advance or final-state conclusion |
+| `200 OK` | Successful retrieval/states-ahead/advance or final-state conclusion |
 | `201 Created` | Upload succeeded |
 | `400 Bad Request` | Invalid board content/shape or invalid supplied parameters |
 | `404 Not Found` | Unknown board ID |
@@ -394,7 +394,7 @@ Use an independent correctness oracle where possible. Assert exact cell configur
 3. **Cycle detection algorithm (resolved):** Straightforward dictionary-based detection with actual state equality is approved. Brent is deferred unless measurements demonstrate a significant performance or memory problem and the developer approves considering it. Preserve exact periods, generation labels, actual engine-call counts, cancellation, and the any-verified-state convention.
 4. **Persistence serialization (resolved):** Minimal System.Text.Json coordinate serialization is approved; width/height remain separate. Custom binary encoding and alternative-codec comparisons are deferred unless measurements demonstrate a meaningful JSON serialization or storage bottleneck. No codec-selection gate is required for the JSON implementation.
 5. **SQLite retry implementation and tuning:** Review the proposed mechanics/classification in Decision 14 before Slice 6 and validate the configurable retry count, provider timeout, and effective total wait bound in the retained SQLite contention/timeout correctness review. The proposed `409` mapping for identified SQLite contention exhaustion requires explicit developer approval. Retry eligible concurrency failures only; unexpected failures and uncertain commits are not blind-retry cases. No numeric values are locked here.
-6. **HTTP Location header (resolved):** No Location requirement in Slice 3. Add `Location: /api/boards/{id}/preview?stepsAhead=0` in Slice 4 when the read endpoint exists; verify it resolves to live current state, not immutable generation-0 history.
+6. **HTTP Location header (resolved):** No Location requirement in Slice 3. Add `Location: /api/boards/{id}/states-ahead?stepsAhead=0` in Slice 4 when the read endpoint exists; verify it resolves to live current state, not immutable generation-0 history.
 7. **Optional cache:** Do not implement `IMemoryCache` initially; `FinalStateResults` is approved *durable memoization*, not a general cache.
 8. **Performance fallback:** Do not silently change the approved rectangular JSON API or introduce extra services if dense boards strain resources. Present measured tradeoffs for developer approval.
 

@@ -283,7 +283,7 @@ public sealed class BoardFinalStateTests
         Assert.Equal(HttpStatusCode.OK, next.StatusCode);
         Assert.Equal(1, fixture.Engine.Calls);
         AssertEmpty(fixture);
-        using var preview = await fixture.Client.GetAsync($"/api/boards/{board.BoardId}/preview?stepsAhead=1");
+        using var preview = await fixture.Client.GetAsync($"/api/boards/{board.BoardId}/states-ahead?stepsAhead=1");
         Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
         Assert.Equal(2, fixture.Engine.Calls);
         AssertEmpty(fixture);

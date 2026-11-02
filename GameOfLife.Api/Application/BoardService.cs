@@ -63,14 +63,15 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
         return latest is null ? null : throw new BoardConflictException();
     }
 
-    /// <summary>Calculates an offset from one committed current snapshot without modifying storage.</summary>
-    /// <param name="boardId">The identifier of the board to preview.</param>
-    /// <param name="stepsAhead">The nonnegative number of generations to calculate from current state.</param>
+    /// <summary>Gets the board state N generations ahead of the current committed generation without advancing the board.</summary>
+    /// <param name="boardId">The identifier of the board to read.</param>
+    /// <param name="stepsAhead">N: the nonnegative number of generations ahead of the current generation. Zero returns the current state.</param>
     /// <param name="cancellationToken">The token checked around the read, during calculation, and during response mapping.</param>
-    /// <returns>The preview with its absolute generation, or null if the board was not found.</returns>
+    /// <returns>The calculated state labeled with current generation plus N, or null if the board was not found.</returns>
+    /// <remarks>Uses one consistent current snapshot. For example, from current generation 5, N = 3 returns generation 8. No state is persisted.</remarks>
     /// <exception cref="ArgumentOutOfRangeException">The offset is negative or its addition would overflow the generation.</exception>
     /// <exception cref="OperationCanceledException">Cancellation was observed.</exception>
-    public BoardResponse? Preview(Guid boardId, long stepsAhead, CancellationToken cancellationToken = default)
+    public BoardResponse? GetNStatesAhead(Guid boardId, long stepsAhead, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(stepsAhead);
@@ -83,11 +84,12 @@ public sealed class BoardService(SqliteBoardStore store, IGenerationEngine engin
         return ToResponse(boardId, state, board.Generation + stepsAhead, cancellationToken);
     }
 
-    /// <summary>Reconstructs an absolute generation from the original upload without modifying storage.</summary>
+    /// <summary>Gets an absolute generation by calculating N generations from the initial uploaded board state.</summary>
     /// <param name="boardId">The identifier of the uploaded board.</param>
-    /// <param name="generationNumber">The nonnegative generation index measured from the original upload.</param>
+    /// <param name="generationNumber">N: the nonnegative absolute generation number. Zero returns the initial board state at generation 0.</param>
     /// <param name="cancellationToken">The token checked around the read, during calculation, and during response mapping.</param>
-    /// <returns>The reconstructed generation, or null if the board was not found.</returns>
+    /// <returns>The reconstructed state labeled with absolute generation N, or null if the board was not found.</returns>
+    /// <remarks>Always starts from the initial board, regardless of current progress. For example, N = 3 returns generation 3 even when the current generation is 5. No state is persisted.</remarks>
     /// <exception cref="ArgumentOutOfRangeException">The requested generation is negative.</exception>
     /// <exception cref="OperationCanceledException">Cancellation was observed.</exception>
     public BoardResponse? GetGeneration(Guid boardId, long generationNumber, CancellationToken cancellationToken = default)

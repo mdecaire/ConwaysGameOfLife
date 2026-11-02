@@ -101,7 +101,7 @@ public sealed class BoardConcurrencyTests
         Assert.DoesNotContain("lost-acknowledgement-secret", await response.Content.ReadAsStringAsync());
         Assert.Equal(1, fixture.Engine.Calls);
         fixture.Reopen();
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(current, fixture.Id, 1, Phases[1]);
         Assert.Equal(1, fixture.Engine.Calls);
     }
@@ -223,7 +223,7 @@ public sealed class BoardConcurrencyTests
             Assert.Equal(3, fixture.Engine.Calls);
             Assert.Equal(initial, fixture.StoredValues().Initial);
             fixture.Reopen();
-            using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+            using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
             await AssertBoard(current, fixture.Id, 7, Phases[2]);
         }
         finally

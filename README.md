@@ -24,8 +24,8 @@ Retaining non-disposable older data requires an explicit migration policy. Never
 |---|---|
 | `POST /api/boards` | Upload a nonempty rectangular boolean grid under `cells`; persist initial/current state at generation zero; return `201` with a unique ID |
 | `POST /api/boards/{id}/next` | Advance current state once, atomically commit state and generation, and return `200`; reload and recalculate on verified generation conflicts |
-| `GET /api/boards/{id}/preview?stepsAhead=N` | Calculate N generations from a consistent current snapshot; return its absolute generation without writes |
-| `GET /api/boards/{id}/generations/{generationNumber}` | Reconstruct an absolute generation from the original upload without writes |
+| `GET /api/boards/{id}/states-ahead?stepsAhead=N` | Get N States Ahead: return the state N generations ahead of the current committed generation without advancing the board |
+| `GET /api/boards/{id}/generations/{generationNumber}` | Get absolute generation N: calculate N generations from the initial uploaded board at generation 0, regardless of current progress; no writes |
 | `GET /api/boards/{id}/final-state` | Return a saved conclusion, or discover and persist one from current state without advancing the board |
 
 Example upload body:
@@ -34,7 +34,7 @@ Example upload body:
 {"cells":[[false,true,false,false],[true,false,false,true]]}
 ```
 
-Responses contain `boardId`, `generation`, `width`, `height`, and `cells` indexed by row then column. The finite board never wraps. Upload's `Location: /api/boards/{id}/preview?stepsAhead=0` identifies the live current board. `/generations/0` always identifies the original uploaded configuration. Both zero reads perform no engine calls.
+Responses contain `boardId`, `generation`, `width`, `height`, and `cells` indexed by row then column. The finite board never wraps. Upload's `Location: /api/boards/{id}/states-ahead?stepsAhead=0` identifies the live current board. `/generations/0` always identifies the original uploaded configuration. Both zero reads perform no engine calls.
 
 Next calculates outside a short SQLite transaction, then updates current state and generation only when the board ID and expected generation match. A verified generation conflict disposes the attempt, reloads committed state, and recalculates. `Next:MaxAttempts` (environment variable `Next__MaxAttempts`) defaults provisionally to three total attempts and must be positive. Exhausted verified conflicts return `409` ProblemDetails; an absent board returns `404`. Next at the maximum generation returns `400` before calculation. Each successful request returns its own committed state, even if another request has since advanced the board. The original upload remains unchanged.
 

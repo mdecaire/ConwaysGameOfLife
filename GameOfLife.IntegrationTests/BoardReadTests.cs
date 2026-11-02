@@ -16,7 +16,7 @@ public sealed class BoardReadTests
         fixture.Seed(Phases[0], Phases[1], 1);
         var before = fixture.StoredValues();
 
-        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
 
         await AssertBoard(response, fixture.Id, 1, Phases[1]);
         Assert.Equal(0, fixture.Engine.Calls);
@@ -32,7 +32,7 @@ public sealed class BoardReadTests
         fixture.Seed(Phases[0], Phases[currentGeneration], currentGeneration);
         var before = fixture.StoredValues();
 
-        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead={steps}");
+        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead={steps}");
 
         await AssertBoard(response, fixture.Id, 2, Phases[2]);
         Assert.Equal(steps, fixture.Engine.Calls);
@@ -51,7 +51,7 @@ public sealed class BoardReadTests
         using var fixture = new BoardFixture();
         fixture.Seed(Phases[0], Phases[1], 1);
         var before = fixture.StoredValues();
-        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview{query}");
+        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead{query}");
         await AssertProblem(response, HttpStatusCode.BadRequest);
         Assert.Equal(0, fixture.Engine.Calls);
         Assert.Equal(before, fixture.StoredValues());
@@ -63,9 +63,9 @@ public sealed class BoardReadTests
         using var fixture = new BoardFixture();
         fixture.Seed(Phases[0], Phases[1], long.MaxValue);
         var before = fixture.StoredValues();
-        using var zero = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var zero = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(zero, fixture.Id, long.MaxValue, Phases[1]);
-        using var overflow = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=1");
+        using var overflow = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=1");
         await AssertProblem(overflow, HttpStatusCode.BadRequest);
         Assert.Equal(0, fixture.Engine.Calls);
         Assert.Equal(before, fixture.StoredValues());
@@ -115,8 +115,8 @@ public sealed class BoardReadTests
     }
 
     [Theory]
-    [InlineData("preview?stepsAhead=0")]
-    [InlineData("preview?stepsAhead=2")]
+    [InlineData("states-ahead?stepsAhead=0")]
+    [InlineData("states-ahead?stepsAhead=2")]
     [InlineData("generations/0")]
     [InlineData("generations/2")]
     public async Task MissingBoardReturnsNotFoundWithoutEngineWork(string route)
@@ -128,7 +128,7 @@ public sealed class BoardReadTests
     }
 
     [Theory]
-    [InlineData("preview?stepsAhead=0")]
+    [InlineData("states-ahead?stepsAhead=0")]
     [InlineData("generations/0")]
     public async Task InvalidBoardIdUsesStandardBinding(string route)
     {
@@ -153,7 +153,7 @@ public sealed class BoardReadTests
             id = board.BoardId;
             Assert.NotNull(upload.Headers.Location);
             location = upload.Headers.Location;
-            Assert.Equal($"/api/boards/{id}/preview?stepsAhead=0", location.OriginalString);
+            Assert.Equal($"/api/boards/{id}/states-ahead?stepsAhead=0", location.OriginalString);
         }
         using (var original = await fixture.Client.GetAsync(location))
             await AssertBoard(original, id, 0, Phases[0]);
@@ -175,7 +175,7 @@ public sealed class BoardReadTests
         {
             if (fixture.Engine.Calls == 1) fixture.SetCurrent(Phases[1], 99);
         };
-        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=2");
+        using var response = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=2");
         await AssertBoard(response, fixture.Id, 2, Phases[2]);
         Assert.Equal(2, fixture.Engine.Calls);
         var stored = fixture.StoredValues();
@@ -186,7 +186,7 @@ public sealed class BoardReadTests
     }
 
     [Theory]
-    [InlineData("preview?stepsAhead=10001")]
+    [InlineData("states-ahead?stepsAhead=10001")]
     [InlineData("generations/10001")]
     public async Task RetrievalDoesNotEnforceTheOldProvisionalTenThousandCap(string route)
     {
@@ -218,13 +218,13 @@ public sealed class BoardReadTests
         // The largest representable target is accepted; cancellation stops work after one call.
         Assert.Throws<OperationCanceledException>(() => absolute
             ? service.GetGeneration(fixture.Id, long.MaxValue, cancellation.Token)
-            : service.Preview(fixture.Id, long.MaxValue, cancellation.Token));
+            : service.GetNStatesAhead(fixture.Id, long.MaxValue, cancellation.Token));
         Assert.Equal(1, fixture.Engine.Calls);
         Assert.Equal(before, fixture.StoredValues());
 
         Assert.Throws<OperationCanceledException>(() => absolute
             ? service.GetGeneration(fixture.Id, 0, cancellation.Token)
-            : service.Preview(fixture.Id, 0, cancellation.Token));
+            : service.GetNStatesAhead(fixture.Id, 0, cancellation.Token));
         Assert.Equal(1, fixture.Engine.Calls);
         Assert.Equal(before, fixture.StoredValues());
     }

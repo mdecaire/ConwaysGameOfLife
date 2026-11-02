@@ -21,7 +21,7 @@ public sealed class BoardNextTests
             await AssertBoard(response, fixture.Id, generation, Phases[generation]);
             Assert.Equal(generation, fixture.Engine.Calls);
             fixture.Reopen();
-            using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+            using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
             await AssertBoard(current, fixture.Id, generation, Phases[generation]);
             Assert.Equal(initial, fixture.StoredValues().Initial);
         }
@@ -60,7 +60,7 @@ public sealed class BoardNextTests
         await AssertBoard(response, fixture.Id, long.MaxValue, Phases[1]);
         Assert.Equal(1, fixture.Engine.Calls);
         fixture.Reopen();
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(current, fixture.Id, long.MaxValue, Phases[1]);
     }
 
@@ -124,7 +124,7 @@ public sealed class BoardNextTests
         Assert.Equal(1, fixture.Engine.Calls);
         fixture.Reopen();
         Assert.Equal(before, fixture.StoredValues());
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(current, fixture.Id, 0, Phases[0]);
         using var verification = new SqliteConnection(fixture.ConnectionString);
         verification.Open();
@@ -146,7 +146,7 @@ public sealed class BoardNextTests
         await AssertBoard(response, fixture.Id, 1, Phases[1]);
         Assert.Equal(1, fixture.Engine.Calls);
         Assert.Equal(initial, fixture.StoredValues().Initial);
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(current, fixture.Id, 1, Phases[1]);
         Assert.Equal(1, fixture.Engine.Calls);
     }
@@ -169,7 +169,7 @@ public sealed class BoardNextTests
         await AssertProblem(response, HttpStatusCode.Conflict);
         Assert.Equal(3, fixture.Engine.Calls);
         Assert.Equal(winner, fixture.StoredValues());
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(current, fixture.Id, 4, Phases[2]);
     }
 
@@ -208,7 +208,7 @@ public sealed class BoardNextTests
         Assert.Equal(1, fixture.Engine.Calls);
         fixture.Reopen();
         Assert.Equal(before, fixture.StoredValues());
-        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/preview?stepsAhead=0");
+        using var current = await fixture.Client.GetAsync($"/api/boards/{fixture.Id}/states-ahead?stepsAhead=0");
         await AssertBoard(current, fixture.Id, 0, Phases[0]);
 
         // A later independent request succeeds after removing the fault: no lock or failed transaction remains.
