@@ -1,10 +1,10 @@
 # Conway’s Game of Life API implementation plan
 
-> Current implementation status: Slices 1-9 are complete and reviewed. Slice 10 HTTP/resource coverage is complete for developer review, including the approved native Kestrel chunk-accounting distinction. Stop before Slice 11.
+> Current implementation status: Slices 1-10 are complete and reviewed. Slice 11 performance verification and final test execution are complete for developer review; see PERFORMANCE.md and the handoff below. The latest Slice 11 request reserves the independent final code review for a separate reviewer. Stop before further implementation or review work.
 
 ## 1. Baseline and architecture
 
-The complete `GAME_OF_LIFE_DESIGN_UPDATED.md` has been read, and AGENTS.md applies. Slices 1-3 are complete. Slice 4 was approved for implementation by the latest request and milestones 4a-4f are now implemented, awaiting developer review. Retain 11 numbered slices and the existing architecture. No performance measurements have been performed.
+The complete `GAME_OF_LIFE_DESIGN_UPDATED.md` has been read, and AGENTS.md applies. Slices 1-10 are complete and reviewed; historical slice handoffs below retain their original checkpoints. Retain 11 numbered slices and the existing architecture. Slice 11 measurements and final Debug/Release execution are recorded in `PERFORMANCE.md`; no production settings, algorithms, dependencies, or tests changed in this slice.
 
 Use exactly three minimal `net8.0` projects. No dedicated benchmarking project or framework is required:
 
@@ -114,7 +114,7 @@ Each numbered row is one developer approval boundary. Internal milestones and in
 | 8 | Final-state HTTP persistence | Introduce `FinalStateResults`. Reuse saved response before engine work; compute/persist only on miss; correct `422` on required over-budget work, no pre-commit failure result, unchanged current state and saved-result reuse after Next/restart |
 | 9 | Concurrent final-state discovery | One durable winner; both requests return its unchanged configuration/metadata despite valid different representatives or a concurrent Next |
 | 10 | HTTP/resource coverage | Complete the small real-Kestrel group, wide/large boards, payload/ProblemDetails boundaries, overflow and server-observed cancellation. Reuse earlier tests; do not duplicate the whole HTTP suite across hosts |
-| 11 | Final verification, cleanup, and performance review | Run complete unit/integration suites; verify all five endpoints and persistence; test representative boards including reasonably large boards. Perform a lightweight performance sanity check of the working application, propose targeted improvements only for measured problems, remove unnecessary code/dependencies/artifacts, finalize README, and complete independent review |
+| 11 | Performance verification and final test execution | Measure representative generation/discovery, memory, JSON, SQLite, and selected HTTP workloads in Release; execute complete Debug/Release suites and builds; document observations and operational review items; remove temporary measurement artifacts and finalize README. Independent code review is separate under the latest request |
 
 **Sequencing defaults:** Establish the upload/reload vertical slice before complex concurrency work. Preserve existing safeguards, including Kestrel's request-size limit. Additional `MaxCells` and arbitrary board-dimension caps are deferred pending measured need and explicit review; the proposed 4,194,304-cell default is not approved. Small test overrides of existing limits are not production defaults. Development databases are disposable and are not shipped. Review operational limits using the working application and the final performance sanity check; the proposed 10,000 computation caps remain provisional. Use small injected retry/timeout settings for correctness tests without locking production tuning. Dictionary-based cycle detection and JSON persistence are approved. Consider Brent only if actual measurements reveal a significant performance or memory problem; reconsider custom binary formats, versioned binary protocols, bitset codecs, or other serialization implementations only if measurements reveal a meaningful storage or serialization bottleneck. Propose any targeted change for developer review before implementation.
 
@@ -261,7 +261,9 @@ Slice 9 review cleanup: removed `CancellationAfterConfirmedCommitPreservesResult
 
 **Guiding principle:** Implement the simplest correct solution. Measure actual performance before introducing optimization complexity; do not optimize hypothetical bottlenecks. No mandatory comparative benchmarking, algorithm-selection gate, dedicated benchmark project, or benchmarking framework is required.
 
-**Slice 11: Final verification, cleanup, and performance review**
+**Slice 11: Performance verification and final test execution**
+
+The latest Slice 11 request narrows this phase to measurements and final verification. It supersedes the older independent-review requirement here and in the final-verification paragraph below: a separate reviewer will examine the repository, architecture, code, and test complexity afterward. Do not perform that review as part of Slice 11.
 
 1. Run the complete unit and integration test suites.
 2. Verify all five endpoints under the proposed contract and persistence behavior, retaining the approved atomicity, concurrency, recovery, and computation-limit guarantees.
@@ -269,8 +271,8 @@ Slice 9 review cleanup: removed `CancellationAfterConfirmedCommitPreservesResult
 4. Perform a lightweight performance sanity check of the working application using simple measurements and existing .NET tooling where sufficient.
 5. Evaluate generation speed, dictionary-based cycle detection, memory consumption, JSON serialization, and SQLite persistence only to determine whether a meaningful performance problem exists. Record enough workload, runtime/machine, and measurement context to explain the observations and their limitations. No competing implementation is needed.
 6. If performance is unacceptable, identify the actual bottleneck and propose targeted improvements for developer review. Do not automatically implement optimizations or add alternative algorithms/codecs.
-7. Remove unnecessary code, dependencies, and artifacts while retaining required correctness coverage and the three-project solution.
-8. Finalize README with setup/run/test instructions, approved behavior and limits, and a concise account of the sanity-check observations and limitations. Complete the final independent review. No comparative benchmark table or mandatory benchmark evidence is required.
+7. Remove temporary measurement artifacts while retaining required correctness coverage and the three-project solution. Production cleanup or optimization requires separately approved scope.
+8. Finalize README with setup/run/test instructions, approved behavior and limits, and a concise account of the sanity-check observations and limitations. Leave the final independent review to the separate reviewer.
 
 **Before Slice 6: SQLite contention/timeout correctness review.** Preserve the focused real-SQLite review of provider busy waits, implicit transaction commands, finite timeout granularity, effective total wait, and cancellation. Review configurable retry/timeout/budget values and separately review the proposed SQLite-contention `409` mapping. This is validation of bounded waiting and failure handling, not a performance-selection gate; no dedicated benchmarking framework or exhaustive tuning matrix is required. Decision 14 remains the detailed policy; its unresolved mechanics and numeric settings require separate review.
 
@@ -345,3 +347,17 @@ git diff --check
 Final Debug and Release each passed 53 unit + 103 integration = 156 cases, with zero failures/skips. Whitespace validation passed. No functional blocker remains.
 
 Deferred to Slice 11: lightweight generation/final-search, memory, serialization, and persistence measurements and cleanup/review of provisional operational values. These correctness tests establish no throughput, peak-memory, cancellation-latency, or stress guarantees. The previously proposed request timeout and unbounded retrieval-count operational concern remain for review; no new timeout, generation cap, or board maximum was silently introduced. STOP after Slice 10 for developer review; do not begin Slice 11.
+
+## Slice 11 handoff: performance verification and final test execution
+
+The latest request confirms Slices 1–10 are reviewed and authorizes this final measurement slice. Complete observations, workload recipes, all three timing samples, memory definitions, environment details, operational assessments, and actual commands/results are in [PERFORMANCE.md](PERFORMANCE.md). The independent final review is explicitly deferred to a separate reviewer.
+
+Measured the actual Release generation engine on small populated, 1,024 × 1,024 sparse/moderate/full, and 2,048 × 2,048 sparse boards. Median one-call times were 1.437 / 11.193 / 757.971 / 1,029.116 / 13.070 ms respectively. Moderate/full calculations cumulatively allocated about 207/259 MiB per call. Discovery covered empty, block, blinker, pulsar, a 1,105-call transient, and an inconclusive glider stopping at exactly 10,000 calls (median 130.305 ms). Also measured production coordinate JSON, real file-backed SQLite with stage separation, and selected production-entry-point Kestrel round trips. These are bounded local serial observations, not stress or capacity guarantees.
+
+Keep all existing settings unchanged: the provisional 10,000-call discovery default, finite SQLite waiting, three total Next attempts, Kestrel body-size configuration, and uncapped retrieval quantities. Dense JSON reconstruction and populated generation allocation are demonstrated costs; arbitrary-count/concurrent resource exposure and the existing server-timeout proposal remain developer review items. No alternative algorithms/codecs, caches, new limits/timeouts, dependencies, or production/test changes were introduced. The temporary measurement project was never added to the solution and was removed with its generated artifacts and databases.
+
+Both final solution builds succeeded, zero errors and one cached NU1900 audit-network warning each. Debug passed 53 unit + 103 integration cases, no failures/skips. First Release passed 53 unit + 102 integration, with one failure during Windows `FileSystemWatcher`/host disposal in `ChunkedLimitIncludesTheFramesActuallyWritten(256, 0)`. The focused six-case group then passed, followed by the complete Release suite: 53 unit + 103 integration, no failures/skips. The teardown failure did not reproduce, but its cause is unresolved and retained in the report. NuGet vulnerability metadata was unreachable during temporary-harness restore; cached packages sufficed for all builds and tests. No successful online audit is claimed. All test commands used the documented Event Log override and single-node/no-shared-compilation settings. `git diff --check` passed.
+
+Independent reviewer action: inspect `KestrelFixture.cs` host/file-provider ownership and shutdown/disposal order, including synchronous and asynchronous disposal paths across the Kestrel host, bootstrap host, and `WebApplicationFactory`. Passing reruns do not dismiss the intermittent teardown failure or establish a production bug. If a real fixture lifecycle issue is confirmed, make the smallest correction using the existing fixture/tests, with no new testing infrastructure. See the explicit reviewer handoff in `PERFORMANCE.md`.
+
+Changed files: `PERFORMANCE.md`, `README.md`, and `PLAN.md`. No functionality changed, so no new failing tests or RED/GREEN cycles were required or claimed. No measured workload failed or reached its watchdog. Slice 11 is complete for developer review, with the teardown observation and operational values explicitly retained for review. STOP here; do not optimize, change settings, begin the independent review, commit, or push without further authorization.

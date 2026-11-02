@@ -1,6 +1,6 @@
 # Conway's Game of Life API
 
-C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-9 are reviewed; Slice 10 HTTP/resource coverage is complete for developer review.
+C#/.NET 8 Minimal API with local SQLite persistence. Requires the .NET 8 SDK; package restore requires NuGet access. Slices 1-10 are reviewed; Slice 11 performance verification and test execution are complete for developer review. The independent final code review remains separate.
 
 Run from the repository root:
 
@@ -67,3 +67,7 @@ dotnet test GameOfLife.sln -c Release --no-restore -m:1 -nr:false -p:UseSharedCo
 ```
 
 Tests use temporary file-backed SQLite with pooling disabled and clean up their own files. Coverage includes durable upload/reopen, independent changing glider phases, current versus initial origin, zero-call reads, exact engine call counts, validation/overflow, snapshot consistency, cancellation, unchanged persistence, and live Location resolution after restart.
+
+Release measurements on a Windows 10 / i7-4790K machine with .NET 8.0.33 and server GC gave median one-generation times of 11 ms for a sparse 1,024 × 1,024 board, 758 ms at approximately 25% density, and 1,029 ms when full. A sparse 2,048 × 2,048 board took 13 ms; 1,024 × 1,024 is not a size ceiling. Populated calculations allocated approximately 207–259 MiB per call cumulatively. Full-board JSON decoding and SQLite reconstruction were also material costs; all settings remain unchanged pending review.
+
+Final Debug and Release runs each passed 53 unit and 103 integration tests with no skips. An earlier Release run hit one nonreproduced Windows file-watcher exception during Kestrel fixture teardown; its six-case group and the complete Release rerun passed. See [Slice 11 performance verification](PERFORMANCE.md) for all samples, memory definitions, persistence/HTTP observations, exact commands, the NuGet audit network limitation, and operational review items. These local serial observations establish no concurrent-load or arbitrary-generation-count guarantee.
